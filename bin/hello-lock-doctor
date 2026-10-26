@@ -432,17 +432,17 @@ def check_deps(plugin_dir, cfg):
     elif cfg.get("powerDown") is False:
         add(S, INFO, "grim not found; not needed while powerDown is off")
     else:
-        add(S, WARN, "grim not found", "The power-down effect is skipped without it.", "omarchy pkg add grim")
+        add(S, WARN, "grim not found", "The power-down effect is skipped without it.", "Install the grim package.")
     player = shutil.which("pw-play") or shutil.which("paplay")
     if player:
         add(S, OK, "%s found (sounds)" % os.path.basename(player))
     else:
-        add(S, WARN, "Neither pw-play nor paplay found", "Sounds stay silent.", "omarchy pkg add pipewire")
+        add(S, WARN, "Neither pw-play nor paplay found", "Sounds stay silent.", "Install the pipewire package.")
     if cfg.get("weather") is not False:
         if shutil.which("curl"):
             add(S, OK, "curl found (weather)")
         else:
-            add(S, WARN, "curl not found", "Weather after unlock stays empty.", "omarchy pkg add curl")
+            add(S, WARN, "curl not found", "Weather after unlock stays empty.", "Install the curl package.")
     missing = [f for f in ("Oxanium-Variable.ttf", "ShareTechMono-Regular.ttf")
                if not os.path.isfile(os.path.join(plugin_dir, "fonts", f))]
     if missing:
@@ -818,7 +818,7 @@ def check_online(cfg):
         add(S, INFO, 'Weather is off ("weather": false), so Hello Lock makes no network requests')
         return
     if not shutil.which("curl"):
-        add(S, WARN, "curl not found, so weather can't be fetched", "", "omarchy pkg add curl")
+        add(S, WARN, "curl not found, so weather can't be fetched", "", "Install the curl package.")
         return
     rc, out, err = run(["curl", "-fsS", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}",
                         "https://wttr.in/?format=%t"], timeout=8)

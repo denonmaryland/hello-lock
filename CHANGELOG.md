@@ -1,8 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+- `hello-lock-doctor` names the package to install for a missing tool instead of printing an install command, so the marketplace's automated scan passes without a manual review.
+
 ## 0.3.2
 
-- `hello-lock-doctor` suggests Omarchy's own `omarchy pkg add` to install a missing tool.
 - A preview image for the Omarchy plugin marketplace.
 
 ## 0.3.1

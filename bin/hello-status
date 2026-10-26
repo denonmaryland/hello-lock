@@ -16,7 +16,7 @@ Sources (all read-only):
             ~/.config/omarchy/shell.json, else locale (en_US -> imperial).
   updates   the checkupdates temp sync DB ($CHECKUPDATES_DB or
             /tmp/checkup-db-$UID), refreshed by the bar's omarchy.system-update
-            widget via omarchy-update-available; counted offline with pacman -Qqu.
+            widget via omarchy-update-available; counted offline from that local database (a read-only pacman query).
   special   date-based greeting (holidays, Friday afternoon, Monday morning, and
             the --birthday date, passed from ~/.config/hello-lock/config.json).
 
@@ -229,7 +229,7 @@ def updates():
             stdin=subprocess.DEVNULL, env=dict(os.environ, LC_ALL="C"))
     except Exception:
         return None
-    # pacman -Qu exits 1 when there is nothing to upgrade.
+    # The query exits 1 when there is nothing to upgrade.
     if r.returncode not in (0, 1):
         return None
     return len([l for l in r.stdout.splitlines() if l.strip()])
