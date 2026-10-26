@@ -6,12 +6,15 @@ const path = require('node:path');
 const vm = require('node:vm');
 const rootDir = process.env.HELLO_LOCK_TEST_ROOT || path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(rootDir, 'Service.qml'), 'utf8');
+const presetScope = {};
+vm.createContext(presetScope);
+vm.runInContext(fs.readFileSync(path.join(rootDir, 'Presets.js'), 'utf8').replace('.pragma library', ''), presetScope);
 const methods = [...source.matchAll(/^  function (\w+)\(([^\n]*)\) \{\n([\s\S]*?)^  \}/gm)];
 function context() {
   const timer = () => ({running: false, stop() { this.running = false }, start() { this.running = true }, restart() { this.running = true }});
   const c = {
     console: {warn() {}, log() {}}, Date, Object, Math,
-    userConfig: {}, lockBranding: {}, lastBrandingPreset: "", brandingRotationKey: "",
+    Presets: presetScope, realUnlockSplash: false, userConfig: {}, lockBranding: {}, lastBrandingPreset: "", brandingRotationKey: "",
     passwordPamConfigured: true, config: {powerDown: false, sounds: false},
     typingEffect: 'cells', unlockTransition: false, unlockGateDone: false,
     lockRequested: false, pendingSessionLock: false, strandedLockResolved: false,
@@ -127,8 +130,8 @@ console.log('7 service regression scenarios passed (mock compositor; no real loc
 {
   const c = context();
   c.userConfig = {name: 'Person', brand: 'Base', selectedPreset: 'a', presetMode: 'cycle',
-    brandingPresets: [{id:'a', branding:{brand:'A', symbol:'@radar'}},
-                     {id:'b', branding:{brand:'B', symbolParts:['one','two'], name:'Wrong'}}]};
+    brandingPresets: [{id:'a', name:'A', branding:{brand:'A', symbol:'@radar'}},
+                     {id:'b', name:'B', branding:{brand:'B', symbolParts:['one','two'], name:'Wrong'}}]};
   c.selectLockBranding();
   assert.equal(c.lockBranding.brand, 'B');
   assert.equal(c.lockBranding.name, undefined);
@@ -156,9 +159,47 @@ console.log('Branding preset rotation scenarios passed.');
 
 {
   const c = context();
-  c.userConfig = {presetMode:'cycle', brandingPresets:[{id:'a',branding:{brand:'A'}},{id:'b',branding:{brand:'B'}}]};
+  c.userConfig = {presetMode:'cycle', brandingPresets:[{id:'a',name:'A',branding:{brand:'A'}},{id:'b',name:'B',branding:{brand:'B'}}]};
   c.beginLock();
   assert.equal(c.lockBranding.brand, 'A');
   c.beginLock();
   assert.equal(c.lockBranding.brand, 'A', 'repeated requests must not change a locked session');
 }
+
+// Evaluate the production bindings, not a separate copy of their logic.
+{
+  const c = context();
+  const frozen = source.match(/readonly property bool brandingFrozen: ([\s\S]*?)\n  readonly property var config:/)[1];
+  const effective = source.match(/readonly property var config: (.*)/)[1];
+  c.configDefaults = {};
+  c.userConfig = {brand:'New brand', symbolParts:['new.svg']};
+  c.lockBranding = {brand:'Previous lock', symbolParts:['old.svg']};
+  c.unlockSplashLoader.item = {shown:false, prime() { this.shown=true; }, play() { this.shown=true; }};
+  const branding = () => {
+    c.brandingFrozen = vm.runInContext(frozen, c);
+    return vm.runInContext(effective, c);
+  };
+  c.lockRequested = true;
+  c.sessionLock.locked = true;
+  c.finishUnlock();
+  assert.equal(c.realUnlockSplash, true);
+  assert.equal(branding().brand, 'Previous lock');
+  c.unlockGateDone = true;
+  c.finishUnlock();
+  assert.equal(branding().brand, 'Previous lock', 'real splash keeps the lock branding after release');
+  // Starting a preview also works while the real splash is still visible.
+  c.playUnlockPreview(-1, {});
+  assert.equal(branding().brand, 'New brand');
+  assert.equal(branding().symbolParts[0], 'new.svg');
+  c.unlockSplashLoader.item.shown = false;
+  c.playUnlockPreview(-1, {});
+  assert.equal(branding().brand, 'New brand');
+}
+{
+  const c = context();
+  c.userConfig = {brand:'Fallback', presetMode:'cycle', brandingPresets:[null, {id:'bad',name:7,branding:{}},
+    {id:'valid',name:'Valid',branding:{brand:'Good'}}, {id:'valid',name:'Duplicate',branding:{brand:'Wrong'}}]};
+  c.selectLockBranding();
+  assert.equal(c.lockBranding.brand, 'Good');
+}
+console.log('Preset review regressions passed.');

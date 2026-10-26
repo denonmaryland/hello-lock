@@ -278,3 +278,12 @@ For scripting: `bin/hello-config preset create "Company / Primary"`,
 `preset delete ID`, and `preset mode manual|cycle|shuffle`. Each successful command
 prints the updated config. Settings waits for pending edits and image/wordmark work
 before running a preset operation.
+
+
+Preset fixes in 0.3.1: unlock previews use current branding, while real unlocks
+retain the selection used for that lock. A failed preset operation keeps the
+window open on the first close attempt so its error remains visible; retrying
+or closing again is supported. Invalid preset entries are ignored by the UI
+and rotation without changing the stored collection or interrupting personal
+settings. The helper rejects malformed preset collections on preset writes;
+repair the invalid entries in config.json before saving presets again.

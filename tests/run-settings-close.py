@@ -56,6 +56,9 @@ ShellRoot {
     i.save({brand: "Queued brand"}, 300)
     i.runPreset("create", "Queued preset"); i.requestExit("close")
    }
+   else if (kind === "failed-preset-close") {
+    i.runPreset("create", "Existing"); i.requestExit("close")
+   }
    else if (kind === "close") i.requestExit("close")
    else if (kind === "birthday") {
     i.birthMonth = "1"; i.birthDay = "14"; i.saveBirthday()
@@ -153,6 +156,25 @@ class SettingsClose(unittest.TestCase):
         self.wait_for(lambda: not json.loads(self.call("status"))["active"])
         self.assertEqual(json.loads(self.call("status"))["lastExit"], exit_action)
         return json.loads(self.config.read_text())
+
+    def test_failed_preset_blocks_first_close_but_allows_retry(self):
+        self.open({"name": "Before", "brandingPresets": [{"id": "a", "name": "Existing", "branding": {}}]})
+        self.call("edit", "failed-preset-close")
+        self.wait_for(lambda: "already exists" in json.loads(self.call("status"))["status"])
+        time.sleep(0.15)
+        self.assertTrue(json.loads(self.call("status"))["active"])
+        self.call("edit", "close")
+        self.wait_for(lambda: not json.loads(self.call("status"))["active"])
+
+    def test_invalid_presets_do_not_interrupt_personal_settings(self):
+        for bad in ([None], [{"id": "a", "name": 7, "branding": {}}], "not a list"):
+            self.open({"name": "Existing name", "brand": "Existing brand", "brandingPresets": bad})
+            state = json.loads(self.call("status"))
+            self.assertEqual(state["name"], "Existing name")
+            self.assertEqual(state["presets"], [])
+            self.assertIn("invalid", state["status"])
+            self.edit_close("name")
+            self.assertEqual(json.loads(self.config.read_text())["brandingPresets"], bad)
 
     def test_preset_waits_for_autosave_and_close(self):
         self.open()

@@ -1,4 +1,5 @@
 import QtQuick
+import "Presets.js" as Presets
 import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
@@ -149,8 +150,9 @@ Item {
 
   function start() {
     var c = currentConfig || {}
-    brandingPresets = Array.isArray(c.brandingPresets) ? c.brandingPresets : []
-    selectedPreset = str(c.selectedPreset)
+    brandingPresets = Presets.usable(c.brandingPresets)
+    var invalidPresets = c.brandingPresets !== undefined && (!Array.isArray(c.brandingPresets) || brandingPresets.length !== c.brandingPresets.length)
+    selectedPreset = brandingPresets.some(function(p) { return p.id === c.selectedPreset }) ? c.selectedPreset : ""
     presetMode = str(c.presetMode) || "manual"
     presetName = (brandingPresets.find(function(p) { return p.id === selectedPreset }) || {}).name || ""
     name = str(c.name)
@@ -190,7 +192,7 @@ Item {
     weather = c.weather !== false
     soundGetProc.running = true
     savedOnce = false
-    status = ""
+    status = invalidPresets ? "Some presets are invalid and were ignored. Your other settings are loaded." : ""
     sectionIndex = 0
   }
 
@@ -198,6 +200,7 @@ Item {
   property string selectedPreset: ""
   property string presetMode: "manual"
   property string presetName: ""
+  property bool presetFailed: false
   property string presetAction: ""
   property string presetValue: ""
   property bool confirmPresetDelete: false
@@ -205,6 +208,7 @@ Item {
   function runPreset(action, value) {
     if (presetBusy) return
     confirmPresetDelete = false
+    presetFailed = false
     presetAction = action
     presetValue = value
     presetWait.start()
@@ -219,6 +223,7 @@ Item {
           || wordmarkTimer.running || wordmarkProc.running || importProc.running) return
       stop()
       if (root.saveFailed || root.wordmarkError) {
+        root.presetFailed = true
         root.status = "Fix the unsaved change before using presets."
         return
       }
@@ -232,6 +237,7 @@ Item {
     stderr: StdioCollector { id: presetError; waitForEnd: true }
     onExited: function(code) {
       if (code !== 0) {
+        root.presetFailed = true
         root.status = String(presetError.text || "Couldn't save preset.").trim()
         return
       }
@@ -243,7 +249,7 @@ Item {
         root.saveFailed = false
         root.status = "saved"
         savedFade.restart()
-      } catch (e) { root.status = "Couldn't reload presets: " + e }
+      } catch (e) { root.presetFailed = true; root.status = "Couldn't reload presets: " + e }
     }
   }
 
@@ -272,7 +278,7 @@ Item {
       root.exitAction = ""
       // A failed write must leave the window and its error visible once;
       // asking again closes, so a broken config can't trap the window.
-      if (root.saveFailed) { root.saveFailed = false; return }
+      if (root.saveFailed || root.presetFailed) { root.saveFailed = false; root.presetFailed = false; return }
       if (action === "setup") root.setupRequested()
       else root.closed()
     }

@@ -72,6 +72,8 @@ def save(raw, backup=True):
     update = json.loads(raw)
     if not isinstance(update, dict):
         sys.exit("hello-config: expected a JSON object")
+    if "brandingPresets" in update and update["brandingPresets"] is not None:
+        validate_presets(update["brandingPresets"])
     try:
         with open(CONFIG, encoding="utf-8") as f:
             current = json.load(f)
@@ -193,6 +195,26 @@ def import_logo(path, announce=True):
 BRANDING_KEYS = ("brand", "logo", "symbol", "symbolParts", "tintLogo", "wordmarkText", "wordmarkStyle")
 
 
+
+def validate_presets(items):
+    if not isinstance(items, list):
+        raise ValueError("invalid branding preset collection: expected a list")
+    ids = set()
+    for p in items:
+        if (not isinstance(p, dict) or not isinstance(p.get("id"), str) or not p["id"].strip()
+                or p["id"] in ids or not isinstance(p.get("name"), str)
+                or not p["name"].strip() or len(p["name"]) > 60 or not isinstance(p.get("branding"), dict)):
+            raise ValueError("invalid branding preset entry: expected a unique ID, name and branding object")
+        ids.add(p["id"])
+        b = p["branding"]
+        if any(k in b and not isinstance(b[k], str) for k in ("brand", "logo", "symbol", "wordmarkText", "wordmarkStyle")):
+            raise ValueError("invalid branding preset: text and image paths must be strings")
+        if "tintLogo" in b and not isinstance(b["tintLogo"], bool):
+            raise ValueError("invalid branding preset: tintLogo must be boolean")
+        if "symbolParts" in b and (not isinstance(b["symbolParts"], list) or len(b["symbolParts"]) > 2
+                                  or any(not isinstance(v, str) or not v.strip() for v in b["symbolParts"])):
+            raise ValueError("invalid branding preset: expected up to two symbol paths")
+
 def presets(action, value):
     try:
         with open(CONFIG, encoding="utf-8") as f:
@@ -202,9 +224,7 @@ def presets(action, value):
     if not isinstance(current, dict):
         raise ValueError("existing config must be an object")
     items = current.get("brandingPresets", [])
-    if not isinstance(items, list) or any(not isinstance(p, dict) or not isinstance(p.get("branding"), dict)
-                                          or not isinstance(p.get("id"), str) for p in items):
-        raise ValueError("invalid branding preset collection")
+    validate_presets(items)
     update = {}
     if action in ("create", "update"):
         name = value.strip()

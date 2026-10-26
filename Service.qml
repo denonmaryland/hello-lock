@@ -1,4 +1,5 @@
 import QtQuick
+import "Presets.js" as Presets
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Pam
@@ -60,18 +61,22 @@ Item {
   property var lockBranding: ({})
   property string lastBrandingPreset: ""
   property string brandingRotationKey: ""
+  property bool realUnlockSplash: false
   readonly property bool brandingFrozen: lockRequested || unlockTransition || sessionLock.locked
-    || (unlockSplashLoader.item !== null && unlockSplashLoader.item.shown)
+    || (realUnlockSplash && unlockSplashLoader.item !== null && unlockSplashLoader.item.shown)
   readonly property var config: Object.assign({}, configDefaults, userConfig, brandingFrozen ? lockBranding : {})
+
+  function playUnlockPreview(index, context) {
+    realUnlockSplash = false
+    unlockSplashLoader.item.play(index, context)
+  }
 
   // Select once per lock. Previewing and repeated lock requests never advance it.
   function selectLockBranding() {
     var keys = ["brand", "logo", "symbol", "symbolParts", "tintLogo", "wordmarkText", "wordmarkStyle"]
     var defaults = {brand: "", logo: "", symbol: "", symbolParts: [], tintLogo: true, wordmarkText: "", wordmarkStyle: "blocks"}
     var chosen = userConfig || {}
-    var pool = Array.isArray(chosen.brandingPresets) ? chosen.brandingPresets.filter(function(p) {
-      return p && typeof p.id === "string" && p.branding && typeof p.branding === "object" && !Array.isArray(p.branding)
-    }) : []
+    var pool = Presets.usable(chosen.brandingPresets)
     if (pool.length && (chosen.presetMode === "cycle" || chosen.presetMode === "shuffle")) {
       var rotationKey = JSON.stringify([chosen.presetMode, chosen.selectedPreset, pool.map(function(p) { return p.id })])
       var previous = (brandingRotationKey === rotationKey ? lastBrandingPreset : "") || chosen.selectedPreset || ""
@@ -439,6 +444,7 @@ Item {
     if (!unlockGateDone) {
       if (unlockGate.running) return
       unlockTransition = true
+      realUnlockSplash = true
       try { if (unlockSplashLoader.item) unlockSplashLoader.item.prime() } catch (e) { console.warn("unlock splash prime failed: " + e) }
       unlockGate.start()
       return
@@ -1038,7 +1044,7 @@ Item {
     onTriggered: {
       if (root.currentlyLocked() || !unlockSplashLoader.item) return
       root.refreshBackground()
-      unlockSplashLoader.item.play(-1, { awaySeconds: 0, status: root.helloStatus })
+      root.playUnlockPreview(-1, { awaySeconds: 0, status: root.helloStatus })
     }
   }
 
@@ -1108,7 +1114,7 @@ Item {
       if (root.currentlyLocked() || !unlockSplashLoader.item) { root.settingsAway = false; return }
       root.refreshBackground()
       if (symbol && !unlockSplashLoader.item.knowsSymbol(symbol)) symbol = ""
-      unlockSplashLoader.item.play(-1, { awaySeconds: 3600, status: root.helloStatus, symbol: symbol })
+      root.playUnlockPreview(-1, { awaySeconds: 3600, status: root.helloStatus, symbol: symbol })
       settingsReturn.armed = true
       settingsReturnFallback.restart()
     }
@@ -1126,6 +1132,7 @@ Item {
     target: unlockSplashLoader.item
     ignoreUnknownSignals: true
     function onShownChanged() {
+      if (!unlockSplashLoader.item.shown) root.realUnlockSplash = false
       if (settingsReturn.armed && !unlockSplashLoader.item.shown) { settingsReturn.armed = false; root.settingsAway = false }
     }
   }
@@ -1278,7 +1285,7 @@ Item {
       if (!unlockSplashLoader.item) return "unavailable"
       root.refreshBackground()
       root.refreshStatus()
-      unlockSplashLoader.item.play(-1, { awaySeconds: 3600, status: root.helloStatus })
+      root.playUnlockPreview(-1, { awaySeconds: 3600, status: root.helloStatus })
       return "ok"
     }
 
@@ -1286,7 +1293,7 @@ Item {
       if (root.currentlyLocked()) return "locked"
       if (!unlockSplashLoader.item) return "unavailable"
       root.refreshBackground()
-      unlockSplashLoader.item.play(index, { awaySeconds: 3600, status: root.helloStatus })
+      root.playUnlockPreview(index, { awaySeconds: 3600, status: root.helloStatus })
       return "ok"
     }
 
@@ -1297,7 +1304,7 @@ Item {
       root.refreshBackground()
       var status = root.helloStatus
       if (kind === "special") status = Object.assign({}, status || {}, { special: { status: "BIRTHDAY PROTOCOL", text: "Happy birthday, " + root.displayName + "." } })
-      unlockSplashLoader.item.play(index, {
+      root.playUnlockPreview(index, {
         awaySeconds: kind === "short" ? 30 : 8040,
         status: status,
         forceShort: kind === "short",
@@ -1313,7 +1320,7 @@ Item {
       if (!unlockSplashLoader.item) return "unavailable"
       if (name !== "" && !unlockSplashLoader.item.knowsSymbol(name)) return "unknown-symbol"
       root.refreshBackground()
-      unlockSplashLoader.item.play(index, { awaySeconds: 3600, status: root.helloStatus, symbol: name })
+      root.playUnlockPreview(index, { awaySeconds: 3600, status: root.helloStatus, symbol: name })
       return "ok"
     }
 
@@ -1323,7 +1330,7 @@ Item {
       if (root.currentlyLocked()) return "locked"
       if (!unlockSplashLoader.item) return "unavailable"
       root.refreshBackground()
-      unlockSplashLoader.item.play(index, { awaySeconds: 3600, status: root.helloStatus,
+      root.playUnlockPreview(index, { awaySeconds: 3600, status: root.helloStatus,
         motion: motion === "secondary" ? "full" : motion, secondary: motion === "secondary" })
       return "ok"
     }

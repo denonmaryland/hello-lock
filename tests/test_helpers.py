@@ -84,6 +84,22 @@ class Helpers(unittest.TestCase):
         self.assertNotEqual(self.run_helper("hello-config", "preset", "create", "Missing").returncode, 0)
         self.assertEqual(self.cfg.read_bytes(), before)
 
+    def test_invalid_preset_schema_is_rejected_without_writes(self):
+        for bad in ([None], [{"id":"a", "name":7, "branding":{}}],
+                    [{"id":"a", "name":"A", "branding":{"symbolParts":[False]}}],
+                    [{"id":"a", "name":"A", "branding":{}}] * 2):
+            self.cfg.write_text('{"name":"Keep"}')
+            before = self.cfg.read_bytes()
+            result = self.run_helper("hello-config", "save", json.dumps({"brandingPresets":bad}))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.cfg.read_bytes(), before)
+            self.cfg.write_text(json.dumps({"name":"Keep", "brandingPresets":bad}))
+            before = self.cfg.read_bytes()
+            result = self.run_helper("hello-config", "preset", "create", "New")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(self.cfg.read_bytes(), before)
+
     def test_bad_preset_operations_preserve_config(self):
         self.cfg.write_text('{"brand":"Before"}')
         self.preset("create", "One")
