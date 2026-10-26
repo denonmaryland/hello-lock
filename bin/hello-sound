@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# hello-sound - play a Hello Lock sound asynchronously.
+#
+#   hello-sound <name>         play sounds/<name>.wav (respects mute, off switch, quiet hours)
+#   hello-sound --test <name>  play ignoring quiet hours (still respects mute + off switch)
+#   hello-sound --list         list available sound names
+#
+# Silent when: default sink is muted, ~/.config/hello-lock/sounds-off exists, or the
+# local hour is inside quiet hours (default 23:00-07:00).
+# Optional ~/.config/hello-lock/sound.conf (key=value, whitelisted, never sourced):
+#   QUIET_START=23   # hour 0-23; empty value disables quiet hours
+#   QUIET_END=7      # hour 0-23
+#   VOLUME=0.5       # 0.0-1.0 playback volume
+# Always returns immediately and exits 0.
+
+SOUND_DIR="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/sounds"
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hello-lock"
+CONF="$CONF_DIR/sound.conf"
+
+QUIET_START=23
+QUIET_END=7
+VOLUME=0.5
+
+load_conf() {
+  [[ -r $CONF ]] || return 0
+  local line key val
+  while IFS= read -r line || [[ -n $line ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ $line == *=* ]] || continue
+    key="${line%%=*}"; val="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+    case $key in
+      QUIET_START|QUIET_END)
+        if [[ -z $val ]]; then
+          printf -v "$key" '%s' ""
+        elif [[ $val =~ ^[0-9]{1,2}$ ]] && (( 10#$val <= 23 )); then
+          printf -v "$key" '%d' "$((10#$val))"
+        fi ;;
+      VOLUME)
+        if [[ $val =~ ^([0-9]*\.[0-9]+|[0-9]+)$ ]]; then
+          VOLUME=$(awk -v v="$val" 'BEGIN{ if (v > 1) v = 1; printf "%.3f", v }')
+        fi ;;
+    esac
+  done < "$CONF"
+}
+
+in_quiet_hours() {
+  [[ -n $QUIET_START && -n $QUIET_END ]] || return 1
+  (( QUIET_START == QUIET_END )) && return 1
+  local h
+  h=$((10#$(date +%H)))
+  if (( QUIET_START < QUIET_END )); then
+    (( h >= QUIET_START && h < QUIET_END ))
+  else
+    (( h >= QUIET_START || h < QUIET_END ))
+  fi
+}
+
+sink_muted() {
+  command -v wpctl >/dev/null 2>&1 || return 1
+  timeout 1 wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -q '\[MUTED\]'
+}
+
+play() {
+  local file=$1
+  if command -v pw-play >/dev/null 2>&1; then
+    setsid -f pw-play --volume "$VOLUME" "$file" >/dev/null 2>&1 </dev/null
+  elif command -v paplay >/dev/null 2>&1; then
+    local pv
+    pv=$(awk -v v="$VOLUME" 'BEGIN{ printf "%d", v * 65536 }')
+    setsid -f paplay --volume="$pv" "$file" >/dev/null 2>&1 </dev/null
+  fi
+}
+
+main() {
+  local ignore_quiet=0 name=""
+  case ${1:-} in
+    --list)
+      local f
+      for f in "$SOUND_DIR"/*.wav; do
+        [[ -e $f ]] && basename "$f" .wav
+      done
+      return 0 ;;
+    --test) ignore_quiet=1; name=${2:-} ;;
+    -h|--help)
+      sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      return 0 ;;
+    *) name=${1:-} ;;
+  esac
+
+  [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+  local file="$SOUND_DIR/$name.wav"
+  [[ -f $file ]] || return 0
+  [[ -e $CONF_DIR/sounds-off ]] && return 0
+
+  load_conf
+  (( ignore_quiet )) || ! in_quiet_hours || return 0
+  sink_muted && return 0
+
+  play "$file"
+  return 0
+}
+
+case ${1:-} in
+  --list|-h|--help) main "$@" 2>/dev/null ;;
+  *) main "$@" >/dev/null 2>&1 </dev/null ;;
+esac
+exit 0

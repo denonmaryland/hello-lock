@@ -1,0 +1,91 @@
+#!/usr/bin/env -S python3 -I
+"""Private, bounded power-down captures. No safe runtime directory means no capture.
+
+capture OUTPUT... prints {directory, files: {OUTPUT: absolute JPEG path}}.
+clean DIRECTORY... removes only this helper's private capture directories.
+"""
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+PREFIX = "hello-lock-snapshot-"
+
+
+def runtime_dir():
+    raw = os.environ.get("XDG_RUNTIME_DIR", "")
+    if not raw or not os.path.isabs(raw):
+        raise ValueError("no private XDG_RUNTIME_DIR; skipping power-down")
+    path = Path(raw)
+    st = path.lstat()
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise ValueError("XDG_RUNTIME_DIR must be an owned, private directory")
+    return path.resolve()
+
+
+def clean(directory, runtime):
+    path = Path(directory)
+    if path.parent != runtime or not path.name.startswith(PREFIX):
+        raise ValueError("refusing to clean outside the capture directory")
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise ValueError("refusing to clean an unsafe capture directory")
+    # No recursive traversal, including through symlinks.
+    for child in path.iterdir():
+        child.unlink()
+    path.rmdir()
+
+
+def capture(outputs, runtime):
+    if not outputs:
+        raise ValueError("no outputs")
+    # Recover old captures left by a crashed shell without touching a concurrent
+    # capture or animation (the normal lifetime is at most a few seconds).
+    for old in runtime.glob(PREFIX + "*"):
+        try:
+            if time.time() - old.lstat().st_mtime > 60:
+                clean(old, runtime)
+        except (OSError, ValueError):
+            pass
+    directory = Path(tempfile.mkdtemp(prefix=PREFIX, dir=runtime))
+    files = {}
+    try:
+        for i, output in enumerate(outputs):
+            path = directory / (str(i) + ".jpg")
+            # Pre-create privately. Monitor names are arguments, never filenames.
+            with path.open("xb"):
+                pass
+            path.chmod(0o600)
+            subprocess.run(["grim", "-t", "jpeg", "-q", "85", "-o", output, str(path)],
+                           check=True, timeout=0.4, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            files[output] = str(path)
+        return {"directory": str(directory), "files": files}
+    except BaseException:
+        clean(directory, runtime)
+        raise
+
+
+def main(args):
+    runtime = runtime_dir()
+    if args and args[0] == "capture":
+        print(json.dumps(capture(args[1:], runtime)))
+    elif args and args[0] == "clean":
+        for directory in args[1:]:
+            clean(directory, runtime)
+    else:
+        raise ValueError("use capture OUTPUT... or clean DIRECTORY...")
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        sys.exit("hello-snapshot: " + str(exc))

@@ -1,0 +1,243 @@
+#!/usr/bin/env -S python3 -I
+"""Render text as a pixel wordmark SVG in one of ten styles.
+
+Usage: hello-wordmark TEXT OUTPUT.svg [--style STYLE]
+       hello-wordmark TEXT - [--style STYLE]  print SVG without writing a file
+       hello-wordmark --styles
+
+Letters come from Hello Blocks (wordmark/glyphs.py), an original pixel alphabet
+drawn for Hello Lock in the spirit of the Omarchy logo: A-Z and 0-9, lowercase
+renders as uppercase, other characters are dropped.
+
+The "omarchy" style instead uses the font the Omarchy logo is drawn from: the
+FIGlet font "Delta Corps Priest 1" by CoSMiC cHiLD (made with patorjk.com's
+FIGFont Editor), in wordmark/delta-corps-priest-1.flf. It has letters only. Every style is a single
+white silhouette, so the lock screen can tint it to the theme.
+"""
+import hashlib
+import os
+import re
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "wordmark"))
+import glyphs  # noqa: E402
+
+PX = 15  # one pixel of the alphabet, in SVG units (the Omarchy logo's grid)
+MAX_CHARS = 16
+STYLES = ["omarchy", "blocks", "outline", "scanline", "led", "tiles", "split", "italic", "wide", "glitch", "shadow"]
+
+
+def bitmap(text):
+    """Compose the text into a list of rows of booleans."""
+    rows = [[] for _ in range(glyphs.HEIGHT)]
+    first = True
+    for ch in text:
+        if ch == " ":
+            for r in rows:
+                r.extend([False] * glyphs.SPACE_WIDTH)
+            first = True
+            continue
+        g = glyphs.glyph(ch)
+        for r, line in zip(rows, g):
+            if not first:
+                r.extend([False] * glyphs.LETTER_GAP)
+            r.extend(c == "#" for c in line)
+        first = False
+    width = max(len(r) for r in rows)
+    return [r + [False] * (width - len(r)) for r in rows]
+
+
+def runs(row):
+    x = 0
+    while x < len(row):
+        if row[x]:
+            start = x
+            while x < len(row) and row[x]:
+                x += 1
+            yield start, x
+        else:
+            x += 1
+
+
+def rect(x, y, w, h):
+    return f"M{x:g} {y:g}h{w:g}v{h:g}h{-w:g}z"
+
+
+def style_paths(bits, style, seed):
+    h, w = len(bits), len(bits[0])
+    on = lambda x, y: 0 <= y < h and 0 <= x < w and bits[y][x]
+    parts = []
+    if style == "blocks":
+        for y, row in enumerate(bits):
+            for a, b in runs(row):
+                parts.append(rect(a * PX, y * PX, (b - a) * PX, PX))
+    elif style == "outline":
+        # Edge pixels only: a hollow version of each letter.
+        for y in range(h):
+            for x in range(w):
+                if on(x, y) and not (on(x - 1, y) and on(x + 1, y) and on(x, y - 1) and on(x, y + 1)):
+                    parts.append(rect(x * PX, y * PX, PX, PX))
+    elif style == "scanline":
+        for y, row in enumerate(bits):
+            for a, b in runs(row):
+                parts.append(rect(a * PX, y * PX, (b - a) * PX, PX * 0.58))
+    elif style == "led":
+        r = PX * 0.42
+        for y in range(h):
+            for x in range(w):
+                if on(x, y):
+                    cx, cy = x * PX + PX / 2, y * PX + PX / 2
+                    parts.append(f"M{cx - r:g} {cy:g}a{r:g} {r:g} 0 1 0 {2 * r:g} 0a{r:g} {r:g} 0 1 0 {-2 * r:g} 0z")
+    elif style == "tiles":
+        inset = PX * 0.12
+        for y in range(h):
+            for x in range(w):
+                if on(x, y):
+                    parts.append(rect(x * PX + inset, y * PX + inset, PX - 2 * inset, PX - 2 * inset))
+    elif style == "split":
+        # A stencil cut across the middle of the word.
+        cut = h // 2
+        for y, row in enumerate(bits):
+            top = y * PX + (PX * 0.35 if y == cut else 0)
+            for a, b in runs(row):
+                parts.append(rect(a * PX, top, (b - a) * PX, PX - (top - y * PX)))
+    elif style == "italic":
+        # Shift rows right toward the top: a pixel-stepped slant.
+        for y, row in enumerate(bits):
+            shift = (h - 1 - y) // 3
+            for a, b in runs(row):
+                parts.append(rect((a + shift) * PX, y * PX, (b - a) * PX, PX))
+    elif style == "wide":
+        for y, row in enumerate(bits):
+            for a, b in runs(row):
+                parts.append(rect(a * PX * 1.6, y * PX, (b - a) * PX * 1.6, PX))
+    elif style == "glitch":
+        # A few slices knocked sideways, the same every time for the same text.
+        digest = hashlib.sha256(seed.encode()).digest()
+        shifts = [0] * h
+        for i in range(3):
+            row = digest[i] % h
+            shifts[row] = (digest[i + 3] % 3 + 1) * (1 if digest[i + 6] % 2 else -1)
+        for y, row in enumerate(bits):
+            for a, b in runs(row):
+                parts.append(rect((a + shifts[y]) * PX + 2 * PX, y * PX, (b - a) * PX, PX))
+    elif style == "shadow":
+        # Solid letters with a one-pixel extrusion down-right, drawn as smaller
+        # blocks so it reads as depth even in a single colour.
+        for y, row in enumerate(bits):
+            for a, b in runs(row):
+                parts.append(rect(a * PX, y * PX, (b - a) * PX, PX))
+        inset = PX * 0.2
+        for y in range(h + 1):
+            for x in range(w + 1):
+                if on(x - 1, y - 1) and not on(x, y):
+                    parts.append(rect(x * PX + inset, y * PX + inset, PX - 2 * inset, PX - 2 * inset))
+    return parts
+
+
+FIGLET_FONT = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+                           "wordmark", "delta-corps-priest-1.flf")
+
+
+def figlet_paths(text):
+    """Render with Delta Corps Priest 1, the way the Omarchy logo is drawn:
+    each character cell is 1x2 pixels; full/upper/lower half blocks fill it."""
+    lines = open(FIGLET_FONT, encoding="utf-8").read().split("\n")
+    header = lines[0].split()
+    height, hardblank, comments = int(header[1]), header[0][-1], int(header[5])
+    font, i = {}, 1 + comments
+    for code in range(32, 127):
+        rows = []
+        for _ in range(height):
+            raw = lines[i].rstrip()
+            i += 1
+            end = raw[-1] if raw else "@"
+            rows.append(raw.rstrip(end).replace(hardblank, " "))
+        font[chr(code)] = rows
+    rows = [""] * height
+    for ch in text:
+        glyph = font.get(ch) or font[" "]
+        width = max(len(r) for r in glyph)
+        for r in range(height):
+            rows[r] += glyph[r].ljust(width)
+    width = max(len(r) for r in rows)
+    halves = []
+    for row in rows:
+        row = row.ljust(width)
+        halves.append([c in "█▀" for c in row])
+        halves.append([c in "█▄" for c in row])
+    while halves and not any(halves[0]):
+        halves.pop(0)
+    while halves and not any(halves[-1]):
+        halves.pop()
+    cols = [x for x in range(width) if any(h[x] for h in halves)]
+    left, right = min(cols), max(cols) + 1
+    halves = [h[left:right] for h in halves]
+    return [halves]
+
+
+def to_svg(text, style):
+    if style == "omarchy":
+        bits = figlet_paths(text)[0]
+        parts = [rect(a * PX, y * PX, (b - a) * PX, PX) for y, row in enumerate(bits) for a, b in runs(row)]
+        w, h = len(bits[0]) * PX, len(bits) * PX
+        return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:g}" height="{h:g}" viewBox="0 0 {w:g} {h:g}">'
+                f'<path fill="#ffffff" d="{"".join(parts)}"/></svg>\n')
+    bits = bitmap(text)
+    parts = style_paths(bits, style, text)
+    h = len(bits) * PX
+    w = len(bits[0]) * PX
+    if style == "italic":
+        w += (len(bits) // 3) * PX
+    elif style == "wide":
+        w = w * 1.6
+    elif style == "glitch":
+        w += 4 * PX
+    elif style == "shadow":
+        w += PX
+        h += PX
+    # One path: adjacent pieces fill as a single shape, so scaling shows no seams.
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:g}" height="{h:g}" viewBox="0 0 {w:g} {h:g}">'
+            f'<path fill="#ffffff" d="{"".join(parts)}"/></svg>\n')
+
+
+def main(argv):
+    if argv[1:] == ["--styles"]:
+        print("\n".join(STYLES))
+        return
+    args = argv[1:]
+    style = "blocks"
+    if "--style" in args:
+        i = args.index("--style")
+        if i + 1 >= len(args):
+            sys.exit("hello-wordmark: --style needs a name (see --styles)")
+        style = args[i + 1]
+        del args[i:i + 2]
+    if style not in STYLES:
+        sys.exit("hello-wordmark: unknown style " + style)
+    if len(args) != 2:
+        sys.exit(__doc__.strip().split("\n\n")[0])
+    text = re.sub(r"[^A-Za-z0-9 ]", "", args[0]).upper()
+    if style == "omarchy":
+        text = re.sub(r"[0-9]", "", text)  # the Omarchy font has letters only
+    text = re.sub(r" +", " ", text).strip()
+    if not text or len(text.replace(" ", "")) > MAX_CHARS:
+        sys.exit("hello-wordmark: the Omarchy style has letters only" if style == "omarchy" and args[0].strip()
+                 else f"hello-wordmark: use 1-{MAX_CHARS} letters or numbers")
+    svg = to_svg(text, style)
+    if args[1] == "-":
+        sys.stdout.write(svg)
+        return
+    out = os.path.abspath(os.path.expanduser(args[1]))
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), suffix=".svg")
+    with os.fdopen(fd, "w") as f:
+        f.write(svg)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, out)
+    print(out)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

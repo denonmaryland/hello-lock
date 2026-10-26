@@ -1,0 +1,126 @@
+#!/usr/bin/env -S python3 -I
+"""Hello Lock settings helper (used by the onboarding screen).
+
+  hello-config save JSON        merge JSON into ~/.config/hello-lock/config.json
+  hello-config import-logo PATH copy an image into ~/.config/hello-lock/ and print
+                                the new path (so moving the original later is safe)
+  hello-config done             mark onboarding as finished
+  hello-config pending          exit 0 if onboarding has never been finished
+  hello-config doctor [ARGS]    check the install and config (runs hello-lock-doctor)
+
+Writes are atomic; unknown keys already in config.json are kept.
+"""
+import json
+import hashlib
+import os
+import shutil
+import sys
+import tempfile
+import subprocess
+import datetime
+
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "hello-lock")
+CONFIG = os.path.join(CONFIG_DIR, "config.json")
+STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "hello-lock")
+DONE = os.path.join(STATE_DIR, "onboarded")
+IMAGE_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED = {"name", "brand", "logo", "symbol", "symbolParts", "tintLogo", "birthday", "wordmarkStyle",
+           "sounds", "weather", "powerDown", "legendary", "clock", "wordmarkText", "motion",
+           "typingEffect"}
+
+
+def atomic_write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def save(raw):
+    update = json.loads(raw)
+    if not isinstance(update, dict):
+        sys.exit("hello-config: expected a JSON object")
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            current = json.load(f)
+        if not isinstance(current, dict):
+            sys.exit("hello-config: existing config must be a JSON object; refusing to replace it")
+    except FileNotFoundError:
+        current = {}
+    except (OSError, ValueError) as exc:
+        sys.exit("hello-config: cannot read existing config; refusing to replace it: " + str(exc))
+    # Store new assets under new names. A canceled setup or failed config write
+    # must never replace an image still referenced by the saved configuration.
+    if update.get("wordmarkText"):
+        renderer = os.path.join(os.path.dirname(os.path.realpath(__file__)), "hello-wordmark")
+        rendered = subprocess.run([renderer, update["wordmarkText"], "-", "--style",
+                                   update.get("wordmarkStyle", current.get("wordmarkStyle")) or "blocks"],
+                                  check=True, capture_output=True, text=True)
+        digest = hashlib.sha256(rendered.stdout.encode()).hexdigest()
+        logo = "wordmark-" + digest + ".svg"
+        atomic_write(os.path.join(CONFIG_DIR, logo), rendered.stdout)
+        update["logo"] = logo
+    for key, value in update.items():
+        if key not in ALLOWED:
+            continue
+        if value is None:
+            current.pop(key, None)
+        else:
+            current[key] = value
+    if os.path.exists(CONFIG):
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        shutil.copy2(CONFIG, CONFIG + ".bak." + stamp)
+    atomic_write(CONFIG, json.dumps(current, indent=2) + "\n")
+
+
+def import_logo(path):
+    src = os.path.realpath(os.path.expanduser(path))
+    ext = os.path.splitext(src)[1].lower()
+    if ext not in IMAGE_TYPES or not os.path.isfile(src):
+        sys.exit("hello-config: pick an SVG, PNG, JPG or WebP image")
+    if os.path.getsize(src) > 20 * 1024 * 1024:
+        sys.exit("hello-config: image is larger than 20 MB")
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(src, "rb") as f:
+        digest = hashlib.file_digest(f, "sha256").hexdigest()
+    dest = os.path.join(CONFIG_DIR, "logo-" + digest + ext)
+    if src != os.path.realpath(dest):
+        fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".tmp-", suffix=ext)
+        os.close(fd)
+        try:
+            shutil.copyfile(src, tmp)
+            os.replace(tmp, dest)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    print(dest)
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "doctor":
+        doctor = os.path.join(os.path.dirname(os.path.realpath(__file__)), "hello-lock-doctor")
+        os.execv(sys.executable, [sys.executable, "-I", doctor] + argv[2:])
+    if len(argv) >= 2 and argv[1] == "save" and len(argv) == 3:
+        save(argv[2])
+    elif len(argv) == 3 and argv[1] == "import-logo":
+        import_logo(argv[2])
+    elif argv[1:] == ["done"]:
+        atomic_write(DONE, "1\n")
+    elif argv[1:] == ["pending"]:
+        sys.exit(1 if os.path.exists(DONE) else 0)
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv)
+    except subprocess.CalledProcessError as exc:
+        sys.exit((exc.stderr or "hello-config: wordmark rendering failed").strip())
+    except (OSError, ValueError, TypeError) as exc:
+        sys.exit("hello-config: " + str(exc))

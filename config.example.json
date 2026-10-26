@@ -1,0 +1,14 @@
+{
+  "name": "Ada",
+  "brand": "",
+  "logo": "~/Pictures/my-logo.svg",
+  "symbol": "",
+  "symbolParts": [],
+  "tintLogo": true,
+  "birthday": "12-10",
+  "sounds": true,
+  "weather": true,
+  "powerDown": true,
+  "legendary": true,
+  "clock": true
+}

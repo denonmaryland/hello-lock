@@ -1,0 +1,354 @@
+#!/usr/bin/env -S python3 -I
+"""Hello Lock unlock-greeting telemetry helper.
+
+Usage: hello-status [--name NAME] [--birthday MM-DD] [--no-weather]
+
+Prints one line of compact JSON and always exits 0 within ~1.5 s:
+  {"battery", "charging", "temp", "condition", "updates", "special"}
+
+Sources (all read-only):
+  battery   /sys/class/power_supply/BAT*/{capacity,status} (+ AC*/online)
+  weather   wttr.in, the same service the bar's omarchy.weather widget uses.
+            The widget keeps no on-disk cache, so this helper caches in
+            ~/.cache/hello-lock/weather.json (fresh for 30 min). Location
+            comes from ~/.local/state/omarchy/settings/weather.json (else IP
+            auto-detect); unit from the omarchy.weather entry "unit" in
+            ~/.config/omarchy/shell.json, else locale (en_US -> imperial).
+  updates   the checkupdates temp sync DB ($CHECKUPDATES_DB or
+            /tmp/checkup-db-$UID), refreshed by the bar's omarchy.system-update
+            widget via omarchy-update-available; counted offline with pacman -Qqu.
+  special   date-based greeting (holidays, Friday afternoon, Monday morning, and
+            the --birthday date, passed from ~/.config/hello-lock/config.json).
+
+Env: HELLO_STATUS_DATE=2026-12-25T10:00 overrides "now".
+     HELLO_STATUS_WEATHER_URL overrides the wttr.in base URL (testing).
+     HELLO_STATUS_WEATHER_CACHE overrides the cache path (testing).
+"""
+
+import datetime
+import glob
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+
+HOME = os.path.expanduser("~")
+NAME = "friend"
+BIRTHDAY = ""
+WEATHER = True
+CACHE = os.environ.get("HELLO_STATUS_WEATHER_CACHE") or os.path.join(
+    HOME, ".cache", "hello-lock", "weather.json")
+WEATHER_URL = os.environ.get("HELLO_STATUS_WEATHER_URL") or "https://wttr.in"
+FRESH_S = 30 * 60
+STALE_MAX_S = 12 * 3600
+SYNC_TIMEOUT = 1.0
+BG_TIMEOUT = 8.0
+
+
+def read(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read().strip()
+
+
+# ---------------------------------------------------------------- battery
+def battery():
+    bats = sorted(glob.glob("/sys/class/power_supply/BAT*"))
+    if not bats:
+        return None, None
+    caps, statuses = [], []
+    for b in bats:
+        try:
+            caps.append(int(read(os.path.join(b, "capacity"))))
+        except Exception:
+            pass
+        try:
+            statuses.append(read(os.path.join(b, "status")))
+        except Exception:
+            pass
+    cap = max(0, min(100, round(sum(caps) / len(caps)))) if caps else None
+    charging = None
+    if "Charging" in statuses:
+        charging = True
+    elif "Discharging" in statuses:
+        charging = False
+    elif statuses:
+        # "Full" / "Not charging": report whether we're on AC.
+        online = None
+        for ac in glob.glob("/sys/class/power_supply/*"):
+            try:
+                if read(os.path.join(ac, "type")) == "Mains":
+                    online = read(os.path.join(ac, "online")) == "1"
+                    break
+            except Exception:
+                pass
+        charging = online
+    return cap, charging
+
+
+# ---------------------------------------------------------------- weather
+def weather_unit():
+    try:
+        with open(os.path.join(HOME, ".config", "omarchy", "shell.json")) as f:
+            cfg = json.load(f)
+        layout = cfg.get("bar", {}).get("layout", {})
+        for side in layout.values():
+            for w in side if isinstance(side, list) else []:
+                if isinstance(w, dict) and w.get("id") == "omarchy.weather":
+                    u = str(w.get("unit", "")).strip().lower()
+                    if u in ("imperial", "metric"):
+                        return u
+    except Exception:
+        pass
+    loc = (os.environ.get("LC_MEASUREMENT") or os.environ.get("LC_ALL")
+           or os.environ.get("LANG") or "").replace(".", "_")
+    if loc.startswith(("en_US", "en-US", "en_LR", "my_")) or loc == "my":
+        return "imperial"
+    return "metric"
+
+
+def weather_query():
+    try:
+        with open(os.path.join(HOME, ".local", "state", "omarchy", "settings",
+                               "weather.json")) as f:
+            d = json.load(f)
+        lat, lon = d.get("latitude"), d.get("longitude")
+        if lat is not None and lon is not None:
+            return "%s,%s" % (float(lat), float(lon))
+        name = str(d.get("name") or "").strip()
+        if name:
+            return urllib.parse.quote(name)
+    except Exception:
+        pass
+    return ""
+
+
+def fetch_weather(query, unit, timeout):
+    url = "%s/%s?format=%%t|%%C&%s" % (WEATHER_URL.rstrip("/"), query,
+                                       "u" if unit == "imperial" else "m")
+    try:
+        r = subprocess.run(
+            ["curl", "-fsS", "--max-time", str(timeout), "--connect-timeout",
+             str(timeout), url],
+            capture_output=True, text=True, timeout=timeout + 0.3,
+            stdin=subprocess.DEVNULL)
+    except Exception:
+        return None
+    out = (r.stdout or "").strip()
+    if r.returncode != 0 or "|" not in out or "°" not in out or "<" in out:
+        return None
+    t, c = out.split("|", 1)
+    t, c = t.strip().lstrip("+"), " ".join(c.split())
+    if not t or len(t) > 12 or len(c) > 60:
+        return None
+    return {"temp": t, "condition": c or None}
+
+
+def load_cache(query, unit):
+    try:
+        with open(CACHE) as f:
+            d = json.load(f)
+        if d.get("unit") != unit or d.get("query") != query:
+            return None, None
+        return d, time.time() - float(d["fetched"])
+    except Exception:
+        return None, None
+
+
+def save_cache(query, unit, w):
+    try:
+        os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+        tmp = "%s.%d.tmp" % (CACHE, os.getpid())
+        with open(tmp, "w") as f:
+            json.dump(dict(w, unit=unit, query=query, fetched=time.time()), f)
+        os.replace(tmp, CACHE)
+    except Exception:
+        pass
+
+
+def spawn_background_refresh():
+    lock = CACHE + ".refreshing"
+    try:
+        if time.time() - os.path.getmtime(lock) < 120:
+            return
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+        with open(lock, "w"):
+            pass
+        subprocess.Popen(
+            [sys.executable, "-I", os.path.abspath(__file__), "--refresh-weather"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    except Exception:
+        pass
+
+
+def weather():
+    unit, query = weather_unit(), weather_query()
+    cached, age = load_cache(query, unit)
+    if cached is not None and 0 <= age < FRESH_S:
+        return cached.get("temp"), cached.get("condition")
+    w = fetch_weather(query, unit, SYNC_TIMEOUT)
+    if w:
+        save_cache(query, unit, w)
+        return w["temp"], w["condition"]
+    # Network slow/down: retry patiently in the background for next time.
+    spawn_background_refresh()
+    if cached is not None and age is not None and age < STALE_MAX_S:
+        return cached.get("temp"), cached.get("condition")
+    return None, None
+
+
+def refresh_weather_main():
+    unit, query = weather_unit(), weather_query()
+    try:
+        w = fetch_weather(query, unit, BG_TIMEOUT)
+        if w:
+            save_cache(query, unit, w)
+    finally:
+        try:
+            os.remove(CACHE + ".refreshing")
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------- updates
+def updates():
+    db = os.environ.get("CHECKUPDATES_DB") or "/tmp/checkup-db-%d" % os.getuid()
+    if not (os.path.isdir(os.path.join(db, "sync"))
+            and os.path.exists(os.path.join(db, "local"))):
+        return None
+    try:
+        r = subprocess.run(
+            ["pacman", "-Qqu", "--dbpath", db, "--logfile", "/dev/null"],
+            capture_output=True, text=True, timeout=1.0,
+            stdin=subprocess.DEVNULL, env=dict(os.environ, LC_ALL="C"))
+    except Exception:
+        return None
+    # pacman -Qu exits 1 when there is nothing to upgrade.
+    if r.returncode not in (0, 1):
+        return None
+    return len([l for l in r.stdout.splitlines() if l.strip()])
+
+
+# ---------------------------------------------------------------- special
+def now():
+    raw = os.environ.get("HELLO_STATUS_DATE", "").strip()
+    if raw:
+        try:
+            return datetime.datetime.fromisoformat(raw)
+        except ValueError:
+            pass
+    return datetime.datetime.now()
+
+
+def birthday():
+    try:
+        m, d = BIRTHDAY.strip().split("-")
+        return int(m), int(d)
+    except Exception:
+        return None
+
+
+def special(dt):
+    md = (dt.month, dt.day)
+    if birthday() == md:
+        return "BIRTHDAY PROTOCOL", "Happy birthday, %s." % NAME
+    if md == (12, 31) and dt.hour >= 18:
+        return "COUNTDOWN ARMED", "Almost midnight, %s." % NAME
+    if md == (1, 1):
+        return "NEW YEAR PROTOCOL", "Happy New Year, %s." % NAME
+    if md in ((12, 24), (12, 25)):
+        return "HOLIDAY MODE", "Merry Christmas, %s." % NAME
+    if md == (10, 31):
+        return "SPECTRAL ACTIVITY DETECTED", "Happy Halloween, %s." % NAME
+    if md == (2, 14):
+        return "HEARTBEAT DETECTED", "Happy Valentine's Day, %s." % NAME
+    if dt.weekday() == 4 and dt.hour >= 15:
+        return "WEEKEND INBOUND", "Weekend's close, %s." % NAME
+    if dt.weekday() == 0 and dt.hour < 12:
+        return "NEW WEEK INITIALIZED", "Let's get it, %s." % NAME
+    return None
+
+
+# ---------------------------------------------------------------- main
+def main():
+    out = {"battery": None, "charging": None, "temp": None,
+           "condition": None, "updates": None, "special": None}
+    results = {}
+
+    def run(key, fn):
+        try:
+            results[key] = fn()
+        except Exception:
+            pass
+
+    threads = [threading.Thread(target=run, args=(k, f), daemon=True)
+               for k, f in (("weather", weather), ("updates", updates))
+               if k != "weather" or WEATHER]
+    for t in threads:
+        t.start()
+
+    try:
+        out["battery"], out["charging"] = battery()
+    except Exception:
+        pass
+    try:
+        s = special(now())
+        if s:
+            out["special"] = {"status": s[0], "text": s[1]}
+    except Exception:
+        pass
+
+    deadline = time.monotonic() + 1.4
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+
+    w = results.get("weather")
+    if isinstance(w, tuple) and len(w) == 2:
+        out["temp"], out["condition"] = w
+    u = results.get("updates")
+    if isinstance(u, int):
+        out["updates"] = u
+
+    sys.stdout.write(json.dumps(out, ensure_ascii=False, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def parse_args(argv):
+    global NAME, BIRTHDAY, WEATHER
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--name" and i + 1 < len(argv):
+            NAME = argv[i + 1].strip()[:64] or NAME
+            i += 2
+        elif a == "--birthday" and i + 1 < len(argv):
+            BIRTHDAY = argv[i + 1]
+            i += 2
+        elif a == "--no-weather":
+            WEATHER = False
+            i += 1
+        else:
+            i += 1
+
+
+if __name__ == "__main__":
+    parse_args(sys.argv[1:])
+    if sys.argv[1:] == ["--refresh-weather"]:
+        try:
+            refresh_weather_main()
+        except Exception:
+            pass
+        sys.exit(0)
+    try:
+        main()
+    except Exception:
+        sys.stdout.write('{"battery":null,"charging":null,"temp":null,'
+                         '"condition":null,"updates":null,"special":null}\n')
+        sys.stdout.flush()
+    os._exit(0)

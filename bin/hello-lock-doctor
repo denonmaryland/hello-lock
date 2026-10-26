@@ -1,0 +1,925 @@
+#!/usr/bin/env -S python3 -I
+"""Hello Lock doctor: check that Hello Lock is installed, loaded and configured well.
+
+Usage: hello-lock-doctor [--json] [--online] [--config PATH] [--no-color]
+
+  --json         machine-readable output
+  --online       also test reaching wttr.in (the only network use; off by default)
+  --config PATH  check this config.json instead of ~/.config/hello-lock/config.json.
+                 Relative paths, sound.conf and sounds-off are looked up next to it.
+  --no-color     plain output even on a terminal
+
+Exit code: 0 all good, 1 warnings only, 2 errors. Read-only: it never changes a
+file, never locks the session and never restarts the shell.
+"""
+import ast
+import datetime
+import difflib
+import glob
+import json
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+OWN_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
+OMARCHY_CONFIG = os.path.join(HOME, ".config", "omarchy")  # the shell hard-codes ~/.config
+SHELL_JSON = os.path.join(OMARCHY_CONFIG, "shell.json")
+INSTALL_DIR = os.path.join(OMARCHY_CONFIG, "plugins", "hello-lock")
+STOCK_ID = "omarchy.lock"
+STOCK_MANIFEST = os.path.join(OMARCHY_PATH, "shell", "plugins", "lock", "manifest.json")
+PAM_PASSWORD = "/etc/pam.d/omarchy-lock-password"
+PAM_FINGERPRINT = "/etc/pam.d/omarchy-lock-fingerprint"
+IMAGE_TYPES = (".svg", ".png", ".jpg", ".jpeg", ".webp")
+MOTION_VALUES = ("auto", "full", "reduced")
+FALLBACK_EFFECTS = ["cells", "scanline", "liquid", "decrypt", "equalizer", "sweep", "pulse", "off"]
+WORDMARK_MAX = 16
+FALLBACK_STYLES = ["omarchy", "blocks", "outline", "scanline", "led", "tiles", "split",
+                   "italic", "wide", "glitch", "shadow"]
+FALLBACK_VARIANTS = ["coin", "assemble", "scan", "glitch", "heartbeat", "orbit", "monolith",
+                     "particles", "warp", "split", "pixels", "legendary"]
+
+OK, INFO, WARN, ERROR = "ok", "info", "warn", "error"
+MARKS = {OK: "✓", INFO: "i", WARN: "!", ERROR: "✗"}
+COLORS = {OK: "32", INFO: "36", WARN: "33", ERROR: "31"}
+
+checks = []
+
+
+def add(section, status, title, detail="", fix=""):
+    checks.append({"section": section, "status": status, "title": title,
+                   "detail": detail, "fix": fix})
+
+
+def tilde(path):
+    path = str(path)
+    return "~" + path[len(HOME):] if path == HOME or path.startswith(HOME + "/") else path
+
+
+def run(cmd, timeout=4, env=None):
+    """Run a command; return (exit code, stdout, stderr). -1 if it couldn't run."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL, env=env)
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+    except FileNotFoundError:
+        return -1, "", "not found: " + cmd[0]
+    except subprocess.TimeoutExpired:
+        return -1, "", "timed out"
+    except OSError as e:
+        return -1, "", str(e)
+
+
+def omarchy_cmd(name):
+    return shutil.which(name) or os.path.join(OMARCHY_PATH, "bin", name)
+
+
+def shell_env():
+    env = dict(os.environ)
+    env.setdefault("OMARCHY_PATH", OMARCHY_PATH)
+    return env
+
+
+def shell_ipc(*args):
+    return run([omarchy_cmd("omarchy-shell"), *args], timeout=5, env=shell_env())
+
+
+def load_json(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def suggest(word, options):
+    m = difflib.get_close_matches(word, list(options), n=1, cutoff=0.6)
+    return m[0] if m else ""
+
+
+def entry_id(entry):
+    if isinstance(entry, dict):
+        return str(entry.get("id") or "")
+    return str(entry) if isinstance(entry, str) else ""
+
+
+# ------------------------------------------------------------ code introspection
+def split_top_level(body):
+    parts, depth, cur, quote = [], 0, "", ""
+    for ch in body:
+        if quote:
+            cur += ch
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch in "[{(":
+            depth += 1
+        elif ch in "]})":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+            continue
+        cur += ch
+    if cur.strip():
+        parts.append(cur)
+    return parts
+
+
+def config_schema(plugin_dir):
+    """Known config keys and their types, read from Service.qml's configDefaults
+    and bin/hello-config's ALLOWED set. Returns (schema, source note)."""
+    schema, notes = {}, []
+    try:
+        src = open(os.path.join(plugin_dir, "Service.qml"), encoding="utf-8").read()
+        m = re.search(r"configDefaults\s*:\s*\(\{(.*?)\}\)", src, re.S)
+        for part in split_top_level(m.group(1)) if m else []:
+            k, _, v = part.partition(":")
+            k, v = k.strip(), v.strip()
+            if not re.fullmatch(r"[A-Za-z_]\w*", k):
+                continue
+            if v in ("true", "false"):
+                schema[k] = bool
+            elif v.startswith("["):
+                schema[k] = list
+            elif v[:1] in "\"'":
+                schema[k] = str
+            else:
+                schema[k] = None
+        if schema:
+            notes.append("Service.qml")
+    except OSError:
+        pass
+    try:
+        src = open(os.path.join(plugin_dir, "bin", "hello-config"), encoding="utf-8").read()
+        m = re.search(r"^ALLOWED\s*=\s*(\{.*?\})", src, re.S | re.M)
+        if m:
+            for k in ast.literal_eval(m.group(1)):
+                schema.setdefault(k, str)  # wordmarkText / wordmarkStyle
+            notes.append("hello-config")
+    except (OSError, ValueError, SyntaxError):
+        pass
+    if not schema:  # last resort, should never be needed
+        schema = {k: str for k in ("name", "brand", "logo", "symbol", "birthday", "motion",
+                                   "wordmarkText", "wordmarkStyle", "typingEffect")}
+        schema.update({k: bool for k in ("tintLogo", "sounds", "weather", "powerDown",
+                                         "legendary", "clock")})
+        schema["symbolParts"] = list
+        notes.append("built-in list")
+    return schema, " + ".join(notes)
+
+
+def wordmark_styles(plugin_dir):
+    rc, out, _ = run([sys.executable, "-I", os.path.join(plugin_dir, "bin", "hello-wordmark"), "--styles"])
+    styles = [s.strip() for s in out.splitlines() if s.strip()] if rc == 0 else []
+    return styles or FALLBACK_STYLES
+
+
+def typing_effects(plugin_dir):
+    """Effect names with a typing/<name>.qml in the plugin (README and harness aren't effects)."""
+    return sorted(os.path.splitext(os.path.basename(p))[0]
+                  for p in glob.glob(os.path.join(plugin_dir, "typing", "*.qml")))
+
+
+def splash_variants(plugin_dir):
+    try:
+        src = open(os.path.join(plugin_dir, "UnlockSplash.qml"), encoding="utf-8").read()
+        m = re.search(r"variantNames\s*:\s*(\[[^\]]*\])", src)
+        if m:
+            names = json.loads(m.group(1))
+            if names:
+                return names
+    except (OSError, ValueError):
+        pass
+    return FALLBACK_VARIANTS
+
+
+# ------------------------------------------------------------ install
+def plugin_state():
+    """Return (listPlugins JSON or None, shell.json dict or None, shell.json error)."""
+    plugins = None
+    rc, out, _ = shell_ipc("shell", "listPlugins")
+    if rc == 0:
+        try:
+            plugins = {p["id"]: p for p in json.loads(out) if isinstance(p, dict) and "id" in p}
+        except (ValueError, TypeError, KeyError):
+            plugins = None
+    try:
+        cfg = load_json(SHELL_JSON)
+        return plugins, cfg if isinstance(cfg, dict) else {}, ""
+    except FileNotFoundError:
+        return plugins, {}, ""
+    except (OSError, ValueError) as e:
+        return plugins, None, str(e)
+
+
+def enabled_in_file(cfg, pid, first_party):
+    """Mirror PluginRegistry.isEnabled for non-bar plugins."""
+    if pid in (cfg.get("disabledPlugins") or []):
+        return False
+    if first_party:
+        return True
+    if any(entry_id(e) == pid for e in (cfg.get("plugins") or [])):
+        return True
+    layout = (cfg.get("bar") or {}).get("layout") or {}
+    return any(entry_id(e) == pid for side in layout.values() if isinstance(side, list) for e in side)
+
+
+def check_install(plugin_dir):
+    S = "Install"
+    manifest = None
+    if os.path.isfile(os.path.join(INSTALL_DIR, "manifest.json")):
+        try:
+            manifest = load_json(os.path.join(INSTALL_DIR, "manifest.json"))
+            add(S, OK, "Installed at %s (version %s)" % (tilde(INSTALL_DIR), manifest.get("version", "?")))
+        except (OSError, ValueError) as e:
+            add(S, ERROR, "The installed manifest.json can't be read", str(e),
+                "omarchy plugin update hello-lock")
+    else:
+        add(S, ERROR, "Hello Lock is not installed in %s" % tilde(os.path.dirname(INSTALL_DIR)),
+            "Omarchy only loads third-party plugins from that folder.",
+            "omarchy plugin add https://github.com/<owner>/hello-lock.git --enable && omarchy restart shell")
+    if os.path.realpath(OWN_DIR) != os.path.realpath(INSTALL_DIR):
+        add(S, INFO, "This doctor runs from %s" % tilde(OWN_DIR),
+            "Install checks look at %s; config checks use this copy's code." % tilde(INSTALL_DIR))
+
+    m = manifest
+    if m is None:
+        try:
+            m = load_json(os.path.join(plugin_dir, "manifest.json"))
+        except (OSError, ValueError):
+            m = {}
+    cloned = str((m.get("omarchy") or {}).get("clonedFrom") or "")
+    if cloned != STOCK_ID:
+        add(S, ERROR, 'manifest.json is missing "clonedFrom": "%s"' % STOCK_ID,
+            "Omarchy gives a third-party plugin the authentication capability only through "
+            "clonedFrom, and that is also what switches the stock lock off on enable.",
+            "restore manifest.json from the release")
+    try:
+        caps = (load_json(STOCK_MANIFEST).get("omarchy") or {}).get("capabilities") or []
+        if "authentication" not in caps:
+            add(S, WARN, "Omarchy's stock lock no longer declares the authentication capability",
+                "Hello Lock inherits its capabilities from %s; Omarchy may have changed how lock "
+                "plugins work." % STOCK_ID, "check for a Hello Lock update")
+    except (OSError, ValueError):
+        add(S, WARN, "Omarchy's stock lock plugin was not found",
+            "Expected %s. Hello Lock inherits its capabilities from it." % tilde(STOCK_MANIFEST),
+            "check that Omarchy is up to date: omarchy update")
+
+    plugins, cfg, cfg_err = plugin_state()
+    if cfg_err:
+        add(S, ERROR, "~/.config/omarchy/shell.json can't be read", cfg_err,
+            "fix the JSON in ~/.config/omarchy/shell.json")
+    if plugins is not None:
+        me = plugins.get("hello-lock")
+        enabled = bool(me and me.get("enabled"))
+        stock_on = bool(plugins.get(STOCK_ID, {}).get("enabled"))
+        others = [p["id"] for p in plugins.values()
+                  if p.get("clonedFrom") == STOCK_ID and p["id"] != "hello-lock" and p.get("enabled")]
+        source = "omarchy plugin list"
+    elif cfg is not None:
+        enabled = enabled_in_file(cfg, "hello-lock", False)
+        stock_on = enabled_in_file(cfg, STOCK_ID, True)
+        others = []
+        for mf in glob.glob(os.path.join(OMARCHY_CONFIG, "plugins", "*", "manifest.json")):
+            try:
+                d = load_json(mf)
+            except (OSError, ValueError):
+                continue
+            pid = str(d.get("id") or "")
+            if pid and pid != "hello-lock" and (d.get("omarchy") or {}).get("clonedFrom") == STOCK_ID \
+                    and enabled_in_file(cfg, pid, False):
+                others.append(pid)
+        source = "shell.json"
+    else:
+        return
+    if enabled:
+        add(S, OK, "Enabled (%s)" % source)
+    else:
+        add(S, ERROR, "Hello Lock is installed but not enabled", "",
+            "omarchy plugin enable hello-lock && omarchy restart shell")
+    if stock_on and not enabled:
+        add(S, INFO, "The stock lock (%s) is in use" % STOCK_ID)
+    elif stock_on:
+        add(S, ERROR, "The stock lock (%s) is still enabled" % STOCK_ID,
+            "Two lock services would both answer `omarchy-shell lock`. Enabling Hello Lock "
+            "normally switches the stock one off.",
+            "omarchy plugin disable %s && omarchy restart shell" % STOCK_ID)
+    elif enabled:
+        add(S, OK, "The stock lock (%s) is switched off" % STOCK_ID)
+    for other in others:
+        add(S, ERROR if enabled else INFO, "Another lock plugin is enabled: %s" % other,
+            "Only one lock service should run." if enabled else "It replaces the stock lock.", "omarchy plugin disable %s && omarchy restart shell" % other)
+
+    for d in sorted({os.path.realpath(INSTALL_DIR) if manifest is not None else None,
+                     os.path.realpath(OWN_DIR)} - {None}):
+        rc, out, err = run([omarchy_cmd("omarchy-plugin-validate"), d], timeout=10)
+        msg = (err or out).replace("omarchy-plugin-validate: ", "")
+        if rc == 0:
+            add(S, OK, "omarchy plugin validate passes for %s" % tilde(d))
+        elif rc == -1:
+            add(S, WARN, "Couldn't run omarchy plugin validate", msg, "")
+        else:
+            add(S, ERROR, "omarchy plugin validate fails for %s" % tilde(d), msg,
+                "reinstall: omarchy plugin remove hello-lock && omarchy plugin add <url> --enable")
+
+
+# ------------------------------------------------------------ shell
+def shell_process_env():
+    """Environment of the running Omarchy shell (same user only), or None."""
+    target = os.path.join(OMARCHY_PATH, "shell")
+    for p in glob.glob("/proc/[0-9]*"):
+        try:
+            with open(p + "/cmdline", "rb") as f:
+                argv = [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+            if not argv or os.path.basename(argv[0]) not in ("quickshell", "qs"):
+                continue
+            if target not in argv and target + "/" not in argv:
+                continue
+            with open(p + "/environ", "rb") as f:
+                pairs = [a.decode(errors="replace").partition("=") for a in f.read().split(b"\0") if a]
+            return {k: v for k, _, v in pairs}
+        except OSError:
+            continue
+    return None
+
+
+def check_shell():
+    S = "Shell"
+    state = {"up": False, "locked": False, "loaded": None, "status": None}
+    rc, out, err = shell_ipc("shell", "ping")
+    if rc != 0:
+        why = err.replace("omarchy-shell is ", "") if err else "no answer"
+        add(S, ERROR, "The Omarchy shell is %s" % why,
+            "Without the shell there is no lock screen at all.", "omarchy restart shell")
+        return state
+    state["up"] = True
+    add(S, OK, "The Omarchy shell is running")
+
+    rc, out, err = shell_ipc("lock", "status")
+    try:
+        status = json.loads(out) if rc == 0 else None
+    except ValueError:
+        status = None
+    if status is None:
+        add(S, ERROR, "No lock service is loaded (%s)" % (err or out or "no answer"),
+            "`omarchy lock` and idle locking do nothing right now. If Hello Lock failed to load, "
+            "the shell log says why: journalctl --user -b | grep -i hello-lock",
+            "omarchy restart shell")
+        return state
+    state["status"] = status
+    state["locked"] = bool(status.get("locked"))
+    if not status.get("passwordPam"):
+        add(S, ERROR, "The running lock can't see its PAM file and will refuse to lock",
+            "", "omarchy-apply-lock && omarchy restart shell")
+
+    rc, out, err = shell_ipc("lock", "configJson")
+    try:
+        loaded = json.loads(out) if rc == 0 else None
+    except ValueError:
+        loaded = None
+    if isinstance(loaded, dict) and loaded.get("pluginDir"):
+        state["loaded"] = loaded
+        add(S, OK, "Hello Lock is the loaded lock screen",
+            "From %s. Name: %s. Logo: %s." % (tilde(loaded["pluginDir"]), loaded.get("name", "?"),
+                                              tilde(loaded.get("logo", "?"))))
+        if os.path.realpath(loaded["pluginDir"]) != os.path.realpath(INSTALL_DIR):
+            add(S, WARN, "The shell loaded Hello Lock from an unexpected folder", tilde(loaded["pluginDir"]),
+                "omarchy restart shell")
+    else:
+        add(S, ERROR, "The running lock screen is not Hello Lock",
+            "Another lock answers `omarchy-shell lock` (%s). Lock services only load when the "
+            "shell starts." % (err or out or "no configJson"), "omarchy restart shell")
+    return state
+
+
+# ------------------------------------------------------------ authentication
+def check_auth():
+    S = "Authentication"
+    if os.path.isfile(PAM_PASSWORD):
+        add(S, OK, "Password PAM file %s exists" % PAM_PASSWORD)
+    else:
+        add(S, ERROR, "Missing %s" % PAM_PASSWORD,
+            "Hello Lock (like Omarchy's own lock) refuses to lock without it.",
+            "omarchy-apply-lock && omarchy restart shell")
+    have_fp_pam = os.path.isfile(PAM_FINGERPRINT)
+    enrolled = None
+    if shutil.which("fprintd-list"):
+        rc, out, _ = run(["fprintd-list", os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name], timeout=4)
+        enrolled = rc == 0 and "finger" in out.lower()
+    if have_fp_pam and enrolled:
+        add(S, INFO, "Fingerprint unlock is set up", "%s exists and a finger is enrolled." % PAM_FINGERPRINT)
+    elif have_fp_pam:
+        add(S, INFO, "Fingerprint PAM file exists, but no enrolled finger was found",
+            "Password unlock works either way.", "omarchy-setup-security-fingerprint")
+    else:
+        add(S, INFO, "Fingerprint unlock is not set up (password only)",
+            "That's fine. To add it on a laptop with a reader:", "omarchy-setup-security-fingerprint")
+
+
+# ------------------------------------------------------------ dependencies
+def check_deps(plugin_dir, cfg):
+    S = "Dependencies"
+    if shutil.which("hyprctl"):
+        add(S, OK, "hyprctl found")
+    else:
+        add(S, ERROR, "hyprctl not found", "Hello Lock needs Hyprland.", "")
+    if shutil.which("grim"):
+        add(S, OK, "grim found (power-down effect)")
+    elif cfg.get("powerDown") is False:
+        add(S, INFO, "grim not found; not needed while powerDown is off")
+    else:
+        add(S, WARN, "grim not found", "The power-down effect is skipped without it.", "sudo pacman -S grim")
+    player = shutil.which("pw-play") or shutil.which("paplay")
+    if player:
+        add(S, OK, "%s found (sounds)" % os.path.basename(player))
+    else:
+        add(S, WARN, "Neither pw-play nor paplay found", "Sounds stay silent.", "sudo pacman -S pipewire")
+    if cfg.get("weather") is not False:
+        if shutil.which("curl"):
+            add(S, OK, "curl found (weather)")
+        else:
+            add(S, WARN, "curl not found", "Weather after unlock stays empty.", "sudo pacman -S curl")
+    missing = [f for f in ("Oxanium-Variable.ttf", "ShareTechMono-Regular.ttf")
+               if not os.path.isfile(os.path.join(plugin_dir, "fonts", f))]
+    if missing:
+        add(S, WARN, "Bundled fonts missing: %s" % ", ".join(missing),
+            "Text falls back to a system font.", "omarchy plugin update hello-lock")
+    else:
+        add(S, OK, "Bundled fonts present")
+    names = ["lock", "error", "unlock-short"] + ["unlock-" + v for v in splash_variants(plugin_dir)]
+    missing = [n for n in names if not os.path.isfile(os.path.join(plugin_dir, "sounds", n + ".wav"))]
+    if missing:
+        add(S, WARN, "Sounds missing: %s" % ", ".join(missing), "Those moments stay silent.",
+            "omarchy plugin update hello-lock")
+    else:
+        add(S, OK, "All %d sounds present" % len(names))
+    for b in ("hello-status", "hello-sound", "hello-config", "hello-snapshot", "hello-wordmark"):
+        p = os.path.join(plugin_dir, "bin", b)
+        if not os.access(p, os.X_OK):
+            add(S, ERROR, "bin/%s is missing or not executable" % b, tilde(p), "chmod +x %s" % tilde(p))
+
+
+# ------------------------------------------------------------ config
+def resolve_path(value, config_dir, plugin_dir):
+    """Mirror Service.qml expandPath()."""
+    v = value.strip()
+    if not v:
+        return ""
+    if v.startswith("~/"):
+        v = HOME + v[1:]
+    if re.fullmatch(r"@[a-z0-9-]+", v):
+        return os.path.join(plugin_dir, "symbols", v[1:] + ".svg")
+    return v if v.startswith("/") else os.path.join(config_dir, v)
+
+
+def check_image(S, key, value, config_dir, plugin_dir, symbols):
+    v = value.strip()
+    if not v:
+        return
+    if v.startswith("@"):
+        name = v[1:]
+        if not re.fullmatch(r"[a-z0-9-]+", name) or name not in symbols:
+            hint = suggest(name.lower(), symbols)
+            add(S, ERROR, '%s: "%s" is not a built-in symbol' % (key, v),
+                ("Did you mean \"@%s\"? " % hint if hint else "") + "Built-ins are the names in symbols/.",
+                "ls %s" % tilde(os.path.join(plugin_dir, "symbols")))
+            return
+    path = resolve_path(v, config_dir, plugin_dir)
+    shown = '%s: "%s"' % (key, v)
+    if v.startswith("~") and not v.startswith("~/"):
+        add(S, ERROR, shown + " uses ~ in a way Hello Lock doesn't expand",
+            "Only a leading ~/ is expanded.", "write the full path, e.g. %s/..." % HOME)
+        return
+    if not os.path.exists(path):
+        add(S, ERROR, shown + " doesn't exist", "Looked for %s." % tilde(path),
+            "fix the path in config.json, or run setup again: omarchy-shell lock onboarding")
+        return
+    if not os.path.isfile(path) or not os.access(path, os.R_OK):
+        add(S, ERROR, shown + " isn't a readable file", tilde(path), "chmod 644 %s" % tilde(path))
+        return
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in IMAGE_TYPES:
+        add(S, WARN, shown + " isn't an SVG, PNG, JPG or WebP", "It may not display.", "use an SVG or PNG")
+    elif os.path.getsize(path) == 0:
+        add(S, ERROR, shown + " is an empty file", tilde(path), "pick another image")
+    else:
+        add(S, OK, "%s found: %s" % (key, tilde(path)))
+
+
+def type_name(t):
+    return {bool: "true or false", list: "a list", str: "text"}.get(t, "a value")
+
+
+def hypr_animations():
+    """True/False from Hyprland, or None. Newer Hyprland reports bool options as
+    {"bool": ...}; older versions as {"int": ...}."""
+    rc, out, _ = run(["hyprctl", "-j", "getoption", "animations:enabled"], timeout=3)
+    if rc != 0:
+        return None
+    try:
+        d = json.loads(out)
+    except ValueError:
+        return None
+    if "bool" in d:
+        return bool(d["bool"])
+    if "int" in d:
+        return d["int"] != 0
+    return None
+
+
+def check_config(config_path, config_dir, plugin_dir):
+    S = "Config"
+    schema, schema_src = config_schema(plugin_dir)
+    cfg = {}
+    if not os.path.exists(config_path):
+        add(S, OK, "No %s; using defaults" % tilde(config_path),
+            "Your account's name and the Omarchy logo.")
+        return cfg
+    try:
+        raw = open(config_path, encoding="utf-8").read()
+    except OSError as e:
+        add(S, ERROR, "%s can't be read" % tilde(config_path), str(e), "chmod 644 %s" % tilde(config_path))
+        return cfg
+    if not raw.strip():
+        add(S, OK, "%s is empty; using defaults" % tilde(config_path))
+        return cfg
+    try:
+        parsed = json.loads(raw)
+    except ValueError as e:
+        add(S, ERROR, "%s is not valid JSON" % tilde(config_path),
+            "%s. Hello Lock ignores the whole file until it's fixed." % e,
+            "python3 -m json.tool %s" % tilde(config_path))
+        return cfg
+    if not isinstance(parsed, dict):
+        add(S, ERROR, "%s must be a JSON object ({ ... })" % tilde(config_path),
+            "Hello Lock ignores it.", "wrap the settings in { }")
+        return cfg
+    cfg = parsed
+    add(S, OK, "%s parses (%d setting%s)" % (tilde(config_path), len(cfg), "" if len(cfg) == 1 else "s"))
+
+    for key in cfg:
+        if key not in schema:
+            hint = suggest(key, schema) or suggest(key.lower(), {k.lower(): k for k in schema})
+            hint = next((k for k in schema if k.lower() == hint.lower()), hint)
+            add(S, WARN, 'Unknown key "%s"' % key,
+                ('Did you mean "%s"? Hello Lock ignores it.' % hint) if hint else
+                "Hello Lock ignores it. Known keys: " + ", ".join(sorted(schema)) + " (from %s)." % schema_src,
+                'rename or remove "%s" in config.json' % key)
+
+    for key, t in schema.items():
+        if key not in cfg or t is None:
+            continue
+        v = cfg[key]
+        bad = not (isinstance(v, bool) if t is bool else isinstance(v, t) and not isinstance(v, bool))
+        if bad:
+            note = {bool: "Anything but false counts as on.", str: "The default is used instead.",
+                    list: "It's ignored."}[t]
+            add(S, ERROR, '"%s" should be %s, not %s' % (key, type_name(t), json.dumps(v)), note,
+                'set "%s" to %s' % (key, {bool: "true or false", str: '"..."', list: '["...", "..."]'}[t]))
+            cfg[key] = None  # skip the value checks below
+
+    b = cfg.get("birthday")
+    if isinstance(b, str) and b.strip():
+        m = re.fullmatch(r"(\d{2})-(\d{2})", b.strip())
+        valid = False
+        if m:
+            try:
+                datetime.date(2024, int(m.group(1)), int(m.group(2)))  # leap year allows 02-29
+                valid = True
+            except ValueError:
+                pass
+        if valid:
+            add(S, OK, 'birthday "%s" is valid' % b.strip())
+        else:
+            add(S, ERROR, 'birthday "%s" isn\'t a valid "MM-DD" date' % b,
+                "No birthday greeting until it is.", 'e.g. "birthday": "12-10"')
+
+    symbols = sorted(os.path.splitext(os.path.basename(p))[0]
+                     for p in glob.glob(os.path.join(plugin_dir, "symbols", "*.svg")))
+    for key in ("logo", "symbol"):
+        if isinstance(cfg.get(key), str):
+            check_image(S, key, cfg[key], config_dir, plugin_dir, symbols)
+    parts = cfg.get("symbolParts")
+    if isinstance(parts, list) and parts:
+        for i, p in enumerate(parts):
+            if isinstance(p, str):
+                check_image(S, "symbolParts[%d]" % i, p, config_dir, plugin_dir, symbols)
+            else:
+                add(S, ERROR, "symbolParts[%d] should be a path, not %s" % (i, json.dumps(p)), "",
+                    "use text paths")
+        if len(parts) > 2:
+            add(S, WARN, "symbolParts has %d entries; only the first two are used" % len(parts),
+                "They are the outer and inner part.", "remove the extras")
+        if isinstance(cfg.get("symbol"), str) and cfg["symbol"].strip():
+            add(S, INFO, 'symbolParts is set, so "symbol" is not used')
+
+    motion = cfg.get("motion")
+    motion = motion if isinstance(motion, str) else "auto"
+    anim = hypr_animations()
+    anim_txt = {True: "on", False: "off", None: "unknown"}[anim]
+    if True:
+        if motion not in MOTION_VALUES:
+            hint = suggest(motion.lower(), MOTION_VALUES)
+            add(S, ERROR, 'motion "%s" isn\'t one of "auto", "full", "reduced"' % motion,
+                ('Did you mean "%s"? ' % hint if hint else "") + "It behaves like \"auto\".",
+                'set "motion": "auto"')
+            motion = "auto"
+        reduced = motion == "reduced" or (motion == "auto" and anim is False)
+        why = {"reduced": "set to reduced", "full": "set to full",
+               "auto": "auto, and Hyprland animations are %s" % anim_txt}[motion]
+        add(S, INFO, "Motion: %s (%s)" % ("reduced, fades instead of big motion" if reduced else "full", why))
+
+    styles = wordmark_styles(plugin_dir)
+    style = cfg.get("wordmarkStyle")
+    if isinstance(style, str) and style and style not in styles:
+        hint = suggest(style.lower(), styles)
+        add(S, ERROR, 'wordmarkStyle "%s" isn\'t a style' % style,
+            ('Did you mean "%s"? ' % hint if hint else "") + "Styles: " + ", ".join(styles) + ".",
+            "omarchy-shell lock onboarding")
+    text = cfg.get("wordmarkText")
+    if isinstance(text, str) and text.strip():
+        st = style if isinstance(style, str) and style in styles else "blocks"
+        clean = re.sub(r"[^A-Za-z0-9 ]", "", text).upper()
+        if st == "omarchy":
+            clean = re.sub(r"[0-9]", "", clean)
+        clean = re.sub(r" +", " ", clean).strip()
+        n = len(clean.replace(" ", ""))
+        if n == 0 or n > WORDMARK_MAX:
+            add(S, ERROR, 'wordmarkText "%s" can\'t be drawn in the %s style' % (text, st),
+                "Use 1-%d letters or numbers%s." % (WORDMARK_MAX, " (letters only)" if st == "omarchy" else ""),
+                "omarchy-shell lock onboarding")
+        else:
+            if clean != re.sub(r" +", " ", text.upper()).strip():
+                add(S, INFO, 'wordmarkText draws as "%s"' % clean,
+                    "Only A-Z%s and spaces are drawn." % ("" if st == "omarchy" else ", 0-9"))
+            logo = cfg.get("logo") if isinstance(cfg.get("logo"), str) else ""
+            wm = os.path.join(config_dir, "wordmark.svg")
+            if resolve_path(logo, config_dir, plugin_dir) != wm:
+                add(S, INFO, "A wordmark is saved, but the logo is something else",
+                    "The wordmark only shows when \"logo\" is \"wordmark.svg\".", "omarchy-shell lock onboarding")
+            else:
+                add(S, OK, 'Wordmark "%s" (%s style)' % (clean, st))
+
+    check_typing_effect(S, cfg, plugin_dir)
+    return cfg
+
+
+def check_typing_effect(S, cfg, plugin_dir):
+    effects = typing_effects(plugin_dir)
+    names = sorted(set(effects) | {"shuffle", "off"})
+    raw = cfg.get("typingEffect")
+    explicit = isinstance(raw, str) and raw != ""
+    effect = raw if explicit else "cells"
+    if effect not in names:
+        if effect in FALLBACK_EFFECTS:  # a real effect whose file isn't installed
+            add(S, WARN, "Typing effect: %s, but typing/%s.qml is missing" % (effect, effect),
+                "The logo stays plain while you type. Installed: " + ", ".join(names) + ".",
+                "reinstall Hello Lock")
+            return
+        hint = suggest(effect.lower(), set(names) | set(FALLBACK_EFFECTS))
+        add(S, ERROR, 'typingEffect "%s" isn\'t an effect' % raw,
+            ('Did you mean "%s"? ' % hint if hint else "") + "Effects: " + ", ".join(names)
+            + '. The lock uses "cells" instead.',
+            'set "typingEffect": "%s"' % (hint or "cells"))
+        effect, explicit = "cells", False
+        if effect not in names:
+            return
+    if effect == "shuffle":
+        pool = [e for e in effects if e != "off"]
+        if pool:
+            add(S, INFO, "Typing effect: shuffle (a different one each lock: %s)" % ", ".join(pool))
+        else:
+            add(S, WARN, "Typing effect: shuffle, but no effects are installed",
+                "typing/ in the plugin has no effect files; the logo stays plain.", "reinstall Hello Lock")
+    elif effect == "off":
+        add(S, INFO, "Typing effect: off (the logo stays still while you type)")
+    else:
+        add(S, INFO, "Typing effect: %s%s" % (effect, "" if explicit else " (default)"))
+
+
+# ------------------------------------------------------------ sound
+def read_sound_conf(path):
+    conf = {"QUIET_START": 23, "QUIET_END": 7, "VOLUME": 0.5}
+    bad = []
+    try:
+        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        return conf, bad, False
+    for n, line in enumerate(lines, 1):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "=" not in line:
+            bad.append(("line %d" % n, "Expected KEY=value, got: %s" % line))
+            continue
+        key, val = (s.strip() for s in line.split("=", 1))
+        val = val.strip("\"'")
+        if key in ("QUIET_START", "QUIET_END"):
+            if val == "":
+                conf[key] = None
+            elif re.fullmatch(r"\d{1,2}", val) and int(val) <= 23:
+                conf[key] = int(val)
+            else:
+                bad.append(("line %d" % n, "%s=%s: use an hour 0-23, or leave it empty." % (key, val)))
+        elif key == "VOLUME":
+            if re.fullmatch(r"\d*\.\d+|\d+", val):
+                conf[key] = min(1.0, float(val))
+            else:
+                bad.append(("line %d" % n, "VOLUME=%s: use 0.0-1.0." % val))
+        else:
+            bad.append(("line %d" % n, "Unknown key %s. Known: QUIET_START, QUIET_END, VOLUME." % key))
+    return conf, bad, True
+
+
+def check_sound(cfg, config_dir):
+    S = "Sound"
+    if cfg.get("sounds") is False:
+        add(S, INFO, 'Sounds are off ("sounds": false in config.json)')
+        return
+    off = os.path.join(config_dir, "sounds-off")
+    if os.path.exists(off):
+        add(S, INFO, "Sounds are off (%s exists)" % tilde(off), "", "rm %s" % tilde(off))
+        return
+    conf_path = os.path.join(config_dir, "sound.conf")
+    conf, bad, exists = read_sound_conf(conf_path)
+    for line, why in bad:
+        add(S, WARN, "sound.conf %s is ignored" % line, why, "edit %s" % tilde(conf_path))
+    qs, qe = conf["QUIET_START"], conf["QUIET_END"]
+    if qs is None or qe is None or qs == qe:
+        add(S, INFO, "Sounds on, volume %.2f, no quiet hours" % conf["VOLUME"])
+    else:
+        h = datetime.datetime.now().hour
+        inside = (qs <= h < qe) if qs < qe else (h >= qs or h < qe)
+        add(S, INFO, "Sounds on, volume %.2f, quiet %02d:00-%02d:00%s" % (
+            conf["VOLUME"], qs, qe, " (quiet right now)" if inside else ""),
+            "" if exists else "Defaults; set them in %s." % tilde(conf_path))
+    if conf["VOLUME"] == 0:
+        add(S, WARN, "sound.conf sets VOLUME=0, so sounds are silent", "", "edit %s" % tilde(conf_path))
+    if shutil.which("wpctl"):
+        rc, out, _ = run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], timeout=2)
+        if rc == 0 and "[MUTED]" in out:
+            add(S, INFO, "Your audio output is muted, so Hello Lock is silent too", out,
+                "wpctl set-mute @DEFAULT_AUDIO_SINK@ 0")
+        elif rc == 0:
+            add(S, OK, "Audio output not muted (%s)" % out)
+
+
+# ------------------------------------------------------------ leftovers
+def check_leftovers(shell_state):
+    S = "Leftovers"
+    env = shell_process_env()
+    runtime = None
+    if env is not None:
+        runtime = env.get("XDG_RUNTIME_DIR")
+        if not runtime:
+            add(S, WARN, "The shell has no XDG_RUNTIME_DIR",
+                "Power-down captures are skipped without a private runtime directory.",
+                'start the shell from your Hyprland session')
+    runtime = runtime or os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    if runtime != "/tmp":
+        try:
+            st = os.stat(runtime)
+            if st.st_mode & 0o077:
+                add(S, WARN, "%s is readable by other users (mode %o)" % (runtime, st.st_mode & 0o777),
+                    "Power-down captures are skipped until it is private.", "chmod 700 %s" % runtime)
+        except OSError:
+            pass
+    found = sorted(set(glob.glob(os.path.join(runtime, "hello-lock-*.jpg"))
+                       + glob.glob(os.path.join(runtime, "hello-lock-snapshot-*", "*.jpg"))
+                       + glob.glob("/tmp/hello-lock-*.jpg")))
+    if not found:
+        add(S, OK, "No power-down snapshots left in %s" % runtime)
+    elif shell_state.get("locked"):
+        add(S, INFO, "%d power-down snapshot(s) present; expected while locked" % len(found))
+    else:
+        add(S, WARN, "%d power-down snapshot(s) left behind" % len(found),
+            "They're screenshots of your desktop from the last lock: " + ", ".join(found)
+            + ". Hello Lock deletes them on unlock; a crash can leave them.",
+            "rm -f " + " ".join("'%s'" % f for f in found))
+    state_dir = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state"),
+                             "hello-lock")
+    done = os.path.join(state_dir, "onboarded")
+    if os.path.exists(done):
+        add(S, INFO, "Setup screen finished (%s)" % tilde(done), "", "run it again: omarchy-shell lock onboarding")
+    else:
+        add(S, INFO, "Setup screen not finished yet",
+            "It opens on the next shell start if config.json is missing or empty.",
+            "omarchy-shell lock onboarding")
+
+
+# ------------------------------------------------------------ network (opt-in)
+def check_online(cfg):
+    S = "Network"
+    if cfg.get("weather") is False:
+        add(S, INFO, 'Weather is off ("weather": false), so Hello Lock makes no network requests')
+        return
+    if not shutil.which("curl"):
+        add(S, WARN, "curl not found, so weather can't be fetched", "", "sudo pacman -S curl")
+        return
+    rc, out, err = run(["curl", "-fsS", "--max-time", "6", "-o", "/dev/null", "-w", "%{http_code}",
+                        "https://wttr.in/?format=%t"], timeout=8)
+    if rc == 0:
+        add(S, OK, "wttr.in is reachable (HTTP %s)" % out)
+    else:
+        add(S, WARN, "wttr.in is not reachable", err or "no answer",
+            'weather stays blank until it is; turn it off with "weather": false')
+
+
+# ------------------------------------------------------------ output
+def render(color, cfg_path):
+    def paint(code, s):
+        return "\033[%sm%s\033[0m" % (code, s) if color else s
+    print(paint("1", "Hello Lock doctor") + "  " + tilde(cfg_path))
+    section = None
+    for c in checks:
+        if c["section"] != section:
+            section = c["section"]
+            print("\n" + paint("1", section))
+        print("  %s %s" % (paint(COLORS[c["status"]], MARKS[c["status"]]), c["title"]))
+        if c["detail"] and c["status"] != OK:
+            print("      " + c["detail"])
+        elif c["detail"] and c["status"] == OK:
+            print("      " + paint("2", c["detail"]))
+        if c["fix"] and c["status"] in (WARN, ERROR, INFO):
+            label = "fix: " if c["status"] != INFO else ""
+            print("      " + paint("2" if c["status"] == INFO else "1", label + c["fix"]))
+    n_err = sum(c["status"] == ERROR for c in checks)
+    n_warn = sum(c["status"] == WARN for c in checks)
+    print()
+    if not n_err and not n_warn:
+        print(paint("32;1", "All good."))
+    else:
+        bits = []
+        if n_err:
+            bits.append("%d problem%s" % (n_err, "" if n_err == 1 else "s"))
+        if n_warn:
+            bits.append("%d warning%s" % (n_warn, "" if n_warn == 1 else "s"))
+        print(paint("31;1" if n_err else "33;1", ", ".join(bits) + "."))
+
+
+def main(argv):
+    as_json, online, color, cfg_path = False, False, sys.stdout.isatty(), None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--json":
+            as_json = True
+        elif a == "--online":
+            online = True
+        elif a == "--no-color":
+            color = False
+        elif a == "--config" and i + 1 < len(argv):
+            cfg_path = os.path.abspath(os.path.expanduser(argv[i + 1]))
+            i += 1
+        elif a.startswith("--config="):
+            cfg_path = os.path.abspath(os.path.expanduser(a.split("=", 1)[1]))
+        elif a in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        else:
+            print("hello-lock-doctor: unknown option %s (see --help)" % a, file=sys.stderr)
+            return 2
+        i += 1
+    if os.environ.get("NO_COLOR"):
+        color = False
+
+    default_dir = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "hello-lock")
+    config_path = cfg_path or os.path.join(default_dir, "config.json")
+    config_dir = os.path.dirname(config_path)
+    plugin_dir = OWN_DIR
+
+    check_install(plugin_dir)
+    shell_state = check_shell()
+    check_auth()
+    # Config first internally (deps and sound read it), but print in the usual order.
+    order_mark = len(checks)
+    cfg = check_config(config_path, config_dir, plugin_dir)
+    config_checks = checks[order_mark:]
+    del checks[order_mark:]
+    check_deps(plugin_dir, cfg)
+    checks.extend(config_checks)
+    check_sound(cfg, config_dir)
+    check_leftovers(shell_state)
+    if online:
+        check_online(cfg)
+
+    n_err = sum(c["status"] == ERROR for c in checks)
+    n_warn = sum(c["status"] == WARN for c in checks)
+    code = 2 if n_err else 1 if n_warn else 0
+    if as_json:
+        print(json.dumps({"exitCode": code, "errors": n_err, "warnings": n_warn,
+                          "config": config_path, "pluginDir": plugin_dir, "checks": checks}, indent=2))
+    else:
+        render(color, config_path)
+    return code
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(130)
