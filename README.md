@@ -259,7 +259,7 @@ Omarchy's stock lock screen comes back.
 - Fonts: [Oxanium](https://fonts.google.com/specimen/Oxanium) and [Share Tech Mono](https://fonts.google.com/specimen/Share+Tech+Mono), SIL Open Font License 1.1.
 - Sounds are synthesized with ffmpeg by `sounds/generate.sh` and are part of this project.
 
-MIT License; see [LICENSE](LICENSE).
+MIT License; see [LICENSE](LICENSE). Third-party licenses and credits: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Development checks
 
