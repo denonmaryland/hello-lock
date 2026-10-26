@@ -613,6 +613,7 @@ Item {
                       onTextEdited: { root.birthDay = text; root.saveBirthday() }
                     }
                     Button {
+                      focusable: true
                       anchors.verticalCenter: parent.verticalCenter
                       visible: root.birthMonth !== "" || root.birthDay !== ""
                       text: "Clear"
@@ -682,7 +683,7 @@ Item {
                 Row {
                   visible: root.logoChoice === "image"
                   spacing: 12
-                  Button { text: "Choose a different file…"; bordered: true; onClicked: root.pickImage() }
+                  Button { focusable: true; text: "Choose a different file…"; bordered: true; onClicked: root.pickImage() }
                   Text {
                     anchors.verticalCenter: parent.verticalCenter
                     width: Math.min(implicitWidth, page.width - 230)
@@ -739,7 +740,7 @@ Item {
                       font.family: Style.font.family
                       font.pixelSize: Style.font.body
                     }
-                    Button { text: "Play unlock"; bordered: true; onClicked: root.unlockPreviewRequested(root.builtinSymbols.indexOf(root.symbolChoice) >= 0 ? root.symbolChoice : "") }
+                    Button { focusable: true; text: "Play unlock"; bordered: true; onClicked: root.unlockPreviewRequested(root.builtinSymbols.indexOf(root.symbolChoice) >= 0 ? root.symbolChoice : "") }
                   }
                 }
 
@@ -798,6 +799,7 @@ Item {
                   Repeater {
                     model: root.typingEffects
                     Button {
+                      focusable: true
                       required property var modelData
                       text: modelData.label
                       bordered: true
@@ -815,6 +817,7 @@ Item {
                   font.pixelSize: Style.font.title
                 }
                 Button {
+                  focusable: true
                   text: "Preview on the lock screen"
                   bordered: true
                   enabled: root.typingEffect !== "off"
@@ -861,7 +864,7 @@ Item {
                     onChanged: function(v) { root.motion = v; root.save({ motion: v === "auto" ? null : v }) }
                   }
                 }
-                Button { text: "Preview the lock screen"; bordered: true; onClicked: root.lockPreviewRequested("") }
+                Button { focusable: true; text: "Preview the lock screen"; bordered: true; onClicked: root.lockPreviewRequested("") }
               }
 
               // ---- Sound.
@@ -893,7 +896,7 @@ Item {
                       onMoved: function(v) { root.volume = v }
                       onReleased: function(v) { root.volume = v; root.saveSound({ volume: v }); root.testSound() }
                     }
-                    Button { anchors.verticalCenter: parent.verticalCenter; text: "Test"; bordered: true; onClicked: root.testSound() }
+                    Button { focusable: true; anchors.verticalCenter: parent.verticalCenter; text: "Test"; bordered: true; onClicked: root.testSound() }
                   }
                 }
                 Toggle {
@@ -1040,12 +1043,16 @@ Item {
     property bool selected: false
     readonly property bool hovered: tileMouse.containsMouse
     signal clicked()
+    activeFocusOnTab: true
+    Keys.onReturnPressed: tile.clicked()
+    Keys.onEnterPressed: tile.clicked()
+    Keys.onSpacePressed: tile.clicked()
     width: 42; height: 42
     radius: Math.max(Style.cornerRadius, 7)
     color: selected ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.22)
       : tileMouse.containsMouse ? Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.08) : "transparent"
-    border.width: 1
-    border.color: selected ? root.accent : root.faint
+    border.color: selected || activeFocus ? root.accent : root.faint
+    border.width: activeFocus ? 2 : 1
     Behavior on color { ColorAnimation { duration: 120 } }
     Image {
       id: tileImage
