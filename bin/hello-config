@@ -1,14 +1,22 @@
 #!/usr/bin/env -S python3 -I
-"""Hello Lock settings helper (used by the onboarding screen).
+"""Hello Lock settings helper (used by the setup and settings screens).
 
   hello-config save JSON        merge JSON into ~/.config/hello-lock/config.json
+  hello-config save --no-backup JSON
+                                the same, without a new timestamped backup (the
+                                settings screen backs up once per visit)
+  hello-config sound-get        print sound.conf as JSON (volume, quiet hours)
+  hello-config sound-save JSON  update sound.conf: {"volume": 0.5,
+                                "quietStart": 23, "quietEnd": 7}; null turns
+                                quiet hours off
   hello-config import-logo PATH copy an image into ~/.config/hello-lock/ and print
                                 the new path (so moving the original later is safe)
   hello-config done             mark onboarding as finished
   hello-config pending          exit 0 if onboarding has never been finished
   hello-config doctor [ARGS]    check the install and config (runs hello-lock-doctor)
 
-Writes are atomic; unknown keys already in config.json are kept.
+Writes are atomic; unknown keys already in config.json are kept. Only the
+newest 10 config backups are kept.
 """
 import json
 import hashlib
@@ -23,6 +31,9 @@ CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduse
 CONFIG = os.path.join(CONFIG_DIR, "config.json")
 STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "hello-lock")
 DONE = os.path.join(STATE_DIR, "onboarded")
+SOUND_CONF = os.path.join(CONFIG_DIR, "sound.conf")
+SOUND_DEFAULTS = {"volume": 0.5, "quietStart": 23, "quietEnd": 7}
+KEEP_BACKUPS = 10
 IMAGE_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED = {"name", "brand", "logo", "symbol", "symbolParts", "tintLogo", "birthday", "wordmarkStyle",
            "sounds", "weather", "powerDown", "legendary", "clock", "wordmarkText", "motion",
@@ -41,7 +52,20 @@ def atomic_write(path, text):
             os.unlink(tmp)
 
 
-def save(raw):
+def prune_backups():
+    prefix = os.path.basename(CONFIG) + ".bak."
+    try:
+        names = sorted(n for n in os.listdir(CONFIG_DIR) if n.startswith(prefix))
+    except OSError:
+        return
+    for name in names[:-KEEP_BACKUPS]:
+        try:
+            os.unlink(os.path.join(CONFIG_DIR, name))
+        except OSError:
+            pass
+
+
+def save(raw, backup=True):
     update = json.loads(raw)
     if not isinstance(update, dict):
         sys.exit("hello-config: expected a JSON object")
@@ -72,10 +96,69 @@ def save(raw):
             current.pop(key, None)
         else:
             current[key] = value
-    if os.path.exists(CONFIG):
+    if backup and os.path.exists(CONFIG):
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         shutil.copy2(CONFIG, CONFIG + ".bak." + stamp)
+        prune_backups()
     atomic_write(CONFIG, json.dumps(current, indent=2) + "\n")
+
+
+def hour(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError("quiet hours must be whole hours from 0 to 23")
+    value = int(value)
+    if not 0 <= value <= 23:
+        raise ValueError("quiet hours must be whole hours from 0 to 23")
+    return value
+
+
+# sound.conf is read by hello-sound with the same rules (key=value, never sourced).
+def sound_read():
+    values = dict(SOUND_DEFAULTS)
+    try:
+        with open(SOUND_CONF, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if "=" not in line:
+            continue
+        key, val = (part.strip().strip("\"'") for part in line.split("=", 1))
+        try:
+            if key == "VOLUME" and val:
+                values["volume"] = min(1.0, max(0.0, float(val)))
+            elif key in ("QUIET_START", "QUIET_END"):
+                values["quietStart" if key == "QUIET_START" else "quietEnd"] = hour(val)
+        except ValueError:
+            pass
+    return values
+
+
+def sound_save(raw):
+    update = json.loads(raw)
+    if not isinstance(update, dict):
+        sys.exit("hello-config: expected a JSON object")
+    values = sound_read()
+    if "volume" in update:
+        volume = update["volume"]
+        if isinstance(volume, bool) or not isinstance(volume, (int, float)):
+            raise ValueError("volume must be a number from 0 to 1")
+        values["volume"] = min(1.0, max(0.0, float(volume)))
+    for key in ("quietStart", "quietEnd"):
+        if key in update:
+            values[key] = hour(update[key])
+    if values["quietStart"] is None or values["quietEnd"] is None:
+        values["quietStart"] = values["quietEnd"] = None
+
+    def fmt(v):
+        return "" if v is None else str(v)
+    atomic_write(SOUND_CONF, "# Hello Lock sounds (written by the settings screen).\n"
+                 "VOLUME=%s\nQUIET_START=%s\nQUIET_END=%s\n"
+                 % (("%.2f" % values["volume"]).rstrip("0").rstrip(".") or "0",
+                    fmt(values["quietStart"]), fmt(values["quietEnd"])))
 
 
 def import_logo(path):
@@ -105,8 +188,14 @@ def main(argv):
     if len(argv) >= 2 and argv[1] == "doctor":
         doctor = os.path.join(os.path.dirname(os.path.realpath(__file__)), "hello-lock-doctor")
         os.execv(sys.executable, [sys.executable, "-I", doctor] + argv[2:])
-    if len(argv) >= 2 and argv[1] == "save" and len(argv) == 3:
+    if len(argv) == 3 and argv[1] == "save":
         save(argv[2])
+    elif len(argv) == 4 and argv[1] == "save" and argv[2] == "--no-backup":
+        save(argv[3], backup=False)
+    elif argv[1:] == ["sound-get"]:
+        print(json.dumps(sound_read()))
+    elif len(argv) == 3 and argv[1] == "sound-save":
+        sound_save(argv[2])
     elif len(argv) == 3 and argv[1] == "import-logo":
         import_logo(argv[2])
     elif argv[1:] == ["done"]:

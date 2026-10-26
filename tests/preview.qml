@@ -54,6 +54,24 @@ ShellRoot {
     target: setup.item
     function onClosed() { setup.active = false }
   }
+  Loader {
+    id: settings
+    active: false
+    source: "plugin/Settings.qml"
+    property var initialConfig: ({})
+    onLoaded: {
+      item.pluginDir = Quickshell.env("HELLO_LOCK_SOURCE")
+      item.configDir = Quickshell.env("XDG_CONFIG_HOME") + "/hello-lock"
+      item.suggestedName = "Ada"
+      item.currentConfig = initialConfig
+      item.start()
+    }
+  }
+  Connections {
+    target: settings.item
+    function onClosed() { settings.active = false }
+  }
+  FileView { id: savedConfig; path: Quickshell.env("XDG_CONFIG_HOME") + "/hello-lock/config.json"; watchChanges: true; onFileChanged: reload() }
   Timer { id: timeout; running: true; interval: 120000; onTriggered: Qt.quit() }
   IpcHandler {
     target: "review"
@@ -106,6 +124,37 @@ ShellRoot {
     function unlock(index: int, reduced: bool): string {
       timeout.restart(); preview.visible = false; setup.active = false
       splash.play(index, {awaySeconds: 3600, motion: reduced ? "reduced" : "full"})
+      return "ok"
+    }
+    // Settings window with `config` (JSON) as the saved settings; `section`
+    // picks the sidebar page (0-6).
+    function settings(config: string, section: int): string {
+      timeout.restart(); preview.visible = false; splash.finish(); setup.active = false
+      settings.active = false
+      settings.initialConfig = config ? JSON.parse(config) : {}
+      settings.active = true
+      settings.item.sectionIndex = section
+      return "ok"
+    }
+    function settingsSection(section: int): string {
+      if (!settings.item) return "unavailable"
+      timeout.restart(); settings.item.sectionIndex = section
+      return "ok"
+    }
+    function settingsState(): string {
+      if (!settings.item) return "unavailable"
+      var i = settings.item
+      return JSON.stringify({status: i.status, name: i.name, logo: i.logoChoice, symbol: i.symbolChoice,
+        custom: !!i.customSymbol, effect: i.typingEffect, motion: i.motion, volume: i.volume,
+        quiet: [i.quietHours, i.quietStart, i.quietEnd], saved: savedConfig.text()})
+    }
+    function settingsSet(key: string, value: string): string {
+      if (!settings.item) return "unavailable"
+      var i = settings.item
+      if (key === "symbol") i.chooseSymbol(value)
+      else if (key === "logo") i.chooseLogo(value)
+      else if (key === "wordmark") { i.chooseLogo("wordmark"); i.wordmarkText = value; i.renderWordmark(true) }
+      else i.save(JSON.parse("{\"" + key + "\":" + value + "}"))
       return "ok"
     }
     function hide(): string { preview.visible = false; setup.active = false; splash.finish(); return "ok" }

@@ -700,7 +700,7 @@ Item {
                 : "Keep the Omarchy logo. You can change it later.",
               "It plays when you unlock: your logo, the Omarchy symbol or a console insignia.",
               root.typingEffects[Math.max(0, root.typingEffectIds.indexOf(root.typingEffect))].hint,
-              "Lock with Super + Ctrl + L to see it. Run  omarchy-shell lock onboarding  to change anything later."
+              "Lock with Super + Ctrl + L to see it. Change anything later with  omarchy-shell lock settings ."
             ][content.shownStep]
             color: Qt.rgba(root.text.r, root.text.g, root.text.b, 0.7)
             font.family: "Oxanium"

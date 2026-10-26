@@ -44,6 +44,33 @@ class Helpers(unittest.TestCase):
         self.assertEqual(next(self.cfg.parent.glob("config.json.bak.*")).read_text(), before)
         self.assertEqual(self.cfg.stat().st_mode & 0o777, 0o600)
 
+    def test_settings_saves_without_backup_and_prunes_old_backups(self):
+        self.cfg.write_text('{"name":"A"}\n')
+        for i in range(13):
+            self.assertEqual(self.run_helper("hello-config", "save", '{"name":"N%d"}' % i).returncode, 0)
+        backups = sorted(self.cfg.parent.glob("config.json.bak.*"))
+        self.assertEqual(len(backups), 10)
+        result = self.run_helper("hello-config", "save", "--no-backup", '{"weather":false}')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(self.cfg.parent.glob("config.json.bak.*")), backups)
+        self.assertEqual(json.loads(self.cfg.read_text()), {"name": "N12", "weather": False})
+
+    def test_sound_settings_round_trip_and_validate(self):
+        conf = self.cfg.parent / "sound.conf"
+        get = lambda: json.loads(self.run_helper("hello-config", "sound-get").stdout)
+        self.assertEqual(get(), {"volume": 0.5, "quietStart": 23, "quietEnd": 7})
+        self.assertEqual(self.run_helper("hello-config", "sound-save", '{"volume":0.8,"quietStart":22}').returncode, 0)
+        self.assertEqual(get(), {"volume": 0.8, "quietStart": 22, "quietEnd": 7})
+        self.assertIn("QUIET_START=22", conf.read_text())
+        self.assertEqual(self.run_helper("hello-config", "sound-save", '{"quietStart":null}').returncode, 0)
+        self.assertEqual(get(), {"volume": 0.8, "quietStart": None, "quietEnd": None})
+        before = conf.read_text()
+        for bad in ('{"quietStart":24}', '{"volume":"loud"}', '{"quietEnd":true}', '[1]'):
+            self.assertNotEqual(self.run_helper("hello-config", "sound-save", bad).returncode, 0, bad)
+        self.assertEqual(conf.read_text(), before)
+        # hello-sound reads the same file: an empty quiet hour turns quiet hours off.
+        self.assertRegex(before, r"QUIET_START=\nQUIET_END=\n")
+
     def test_malformed_config_is_never_replaced(self):
         for before in ('{"weather":false,', '[1,2]', '"settings"'):
             with self.subTest(before=before):

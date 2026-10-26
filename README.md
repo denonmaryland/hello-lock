@@ -44,7 +44,7 @@ The first time the shell starts with Hello Lock, a short setup screen opens. It 
 
 <p align="center"><img src="docs/setup.gif" alt="The setup screen: typing a wordmark, trying styles, picking an unlock symbol" width="620"></p>
 
-Then **Save and try it** plays your unlock animation. Enter goes forward and Esc goes back. On the logo step, ↑/↓ switch options and Tab / Shift+Tab change the wordmark style. On the symbol step, ←/→ move along a row, ↑/↓ change rows, and the symbol's name shows below the grid. On the typing step, ←/→ or Tab pick the effect. Run the setup again any time:
+Then **Save and try it** plays your unlock animation. Enter goes forward and Esc goes back. On the logo step, ↑/↓ switch options and Tab / Shift+Tab change the wordmark style. On the symbol step, ←/→ move along a row, ↑/↓ change rows, and the symbol's name shows below the grid. On the typing step, ←/→ or Tab pick the effect. Run the setup again any time, or use [Settings](#settings) to change one thing:
 
 ```bash
 omarchy-shell lock onboarding
@@ -55,6 +55,26 @@ use content-based filenames, so trying a new logo does not overwrite the one
 your current settings use. Previous assets are retained, including when setup
 is canceled. Saving backs up an existing `config.json` with a timestamp and
 refuses to replace malformed or unreadable settings.
+
+## Settings
+
+Change anything later in one window, with no steps to click through:
+
+```bash
+omarchy-shell lock settings
+```
+
+<p align="center"><img src="docs/settings.png" alt="The settings window: a sidebar of sections and the unlock symbol grid" width="720"></p>
+
+Every option is on one page, grouped in a sidebar: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol and the gold unlock), **Typing**, **Lock screen** (clock, power-down, motion), **Sound** (on/off, volume, quiet hours) and **Weather**. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. **Play unlock** and **Preview** show the result without locking. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections.
+
+A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows as **Custom**. If you try a built-in symbol, you can switch back to Custom until you close the window.
+
+To open it from the Omarchy menu, add this line to `~/.config/omarchy/extensions/omarchy-menu.jsonc`. It appears under **Style**:
+
+```jsonc
+"style.lockscreen": {"icon":"","label":"Lock Screen","action":"omarchy-shell lock settings"},
+```
 
 ## Install
 

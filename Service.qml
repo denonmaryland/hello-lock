@@ -600,7 +600,41 @@ Item {
     MouseArea {
       anchors.fill: parent
       acceptedButtons: Qt.LeftButton | Qt.RightButton
-      onClicked: root.previewVisible = false
+      onClicked: root.closePreview()
+    }
+
+    Item {
+      anchors.fill: parent
+      focus: root.previewVisible
+      Keys.onEscapePressed: root.closePreview()
+    }
+  }
+
+  function closePreview() {
+    if (previewDemo.running) {
+      previewDemo.stop()
+      previewFailures = 0
+      previewTyped = 0
+      previewAuthenticating = false
+      previewFailureShown = false
+      previewTypingOverride = ""
+    }
+    previewVisible = false
+  }
+
+  // Settings "Preview": type a pretend password (dummy characters, never PAM),
+  // check, fail, repeat until the preview is closed.
+  Timer {
+    id: previewDemo
+    interval: 140
+    repeat: true
+    property int tick: 0
+    onTriggered: {
+      tick += 1
+      if (tick <= 12) { root.previewFailureShown = false; root.previewAuthenticating = false; root.previewTyped = tick }
+      else if (tick === 18) { root.previewAuthenticating = true; root.previewTyped = 0 }
+      else if (tick === 25) { root.previewAuthenticating = false; root.previewFailureShown = true; root.previewFailures += 1 }
+      else if (tick >= 40) tick = 0
     }
   }
 
@@ -975,6 +1009,96 @@ Item {
     }
   }
 
+  // ---- Settings (Settings.qml): `omarchy-shell lock settings`. Same rules as
+  // onboarding: loaded indirectly, never while a lock is requested, no access
+  // to authentication.
+  property bool settingsOpen: false
+  property bool settingsAway: false
+
+  function openSettings() {
+    if (lockRequested || currentlyLocked()) return false
+    onboardingOpen = false
+    settingsAway = false
+    settingsOpen = true
+    return true
+  }
+
+  onLockRequestedChanged: if (lockRequested) { settingsOpen = false; settingsAway = false }
+
+  Loader {
+    id: settingsLoader
+    active: root.settingsOpen && !root.lockRequested
+    source: "Settings.qml"
+    onLoaded: {
+      item.pluginDir = root.pluginDir
+      item.configDir = root.configDir
+      item.suggestedName = root.accountName
+        || (root.userName ? root.userName.charAt(0).toUpperCase() + root.userName.slice(1) : "")
+      item.currentConfig = root.userConfig
+      item.start()
+    }
+    onStatusChanged: if (status === Loader.Error) { console.warn("hello-lock: settings failed to load"); root.settingsOpen = false }
+  }
+  Binding { target: settingsLoader.item; property: "away"; value: root.settingsAway; when: settingsLoader.status === Loader.Ready }
+
+  Connections {
+    target: settingsLoader.item
+    ignoreUnknownSignals: true
+    function onClosed() { root.settingsOpen = false }
+    function onSetupRequested() { root.settingsOpen = false; root.openOnboarding() }
+    function onUnlockPreviewRequested(symbol) {
+      if (root.currentlyLocked() || !unlockSplashLoader.item) return
+      root.settingsAway = true
+      settingsReturn.armed = false
+      // Let the config.json write land first, as after setup.
+      settingsUnlockTimer.symbol = symbol
+      settingsUnlockTimer.restart()
+    }
+    function onLockPreviewRequested(effect) {
+      root.settingsAway = true
+      root.refreshBackground()
+      root.refreshFingerprintStatus()
+      root.previewTypingOverride = effect === "shuffle" ? "" : effect
+      root.previewShuffled = root.drawShuffle()
+      root.previewFailures = 0
+      previewDemo.tick = 0
+      previewDemo.start()
+      root.previewVisible = true
+    }
+  }
+
+  Timer {
+    id: settingsUnlockTimer
+    interval: 450
+    property string symbol: ""
+    onTriggered: {
+      if (root.currentlyLocked() || !unlockSplashLoader.item) { root.settingsAway = false; return }
+      root.refreshBackground()
+      if (symbol && !unlockSplashLoader.item.knowsSymbol(symbol)) symbol = ""
+      unlockSplashLoader.item.play(-1, { awaySeconds: 3600, status: root.helloStatus, symbol: symbol })
+      settingsReturn.armed = true
+      settingsReturnFallback.restart()
+    }
+  }
+
+  // A splash that never shows must not leave settings hidden.
+  Timer {
+    id: settingsReturnFallback
+    interval: 15000
+    onTriggered: if (settingsReturn.armed) { settingsReturn.armed = false; root.settingsAway = false }
+  }
+
+  // Bring settings back once a preview it started is over.
+  Connections {
+    target: unlockSplashLoader.item
+    ignoreUnknownSignals: true
+    function onShownChanged() {
+      if (settingsReturn.armed && !unlockSplashLoader.item.shown) { settingsReturn.armed = false; root.settingsAway = false }
+    }
+  }
+  QtObject { id: settingsReturn; property bool armed: false }
+  onPreviewVisibleChanged: if (!previewVisible && settingsAway && !settingsReturn.armed) settingsAway = false
+
   // First run: no config.json and onboarding never finished.
   Process {
     id: onboardingPendingProc
@@ -1182,7 +1306,13 @@ Item {
 
     // Open the first-run setup screen (name, birthday, logo).
     function onboarding(): string {
+      root.settingsOpen = false
       return root.openOnboarding() ? "ok" : "locked"
+    }
+
+    // Open the settings window (every option on one page).
+    function settings(): string {
+      return root.openSettings() ? "ok" : "locked"
     }
 
     // Effective Hello Lock settings, for checking a config.json edit.
