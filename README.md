@@ -8,6 +8,7 @@ A lock screen for [Omarchy](https://omarchy.org) that greets you.
 </p>
 
 - **Your name and logo** on the lock screen, in your theme's colors.
+- **Several looks, one click apart.** Save a logo or wordmark with its unlock symbol as a [brand preset](#brand-presets), switch between presets, or have Hello Lock cycle or shuffle them each time you lock.
 - **It reacts as you type, your choice of eight ways.** By default the logo starts dim and lights up cell by cell with each character, fully lit at about 12. Pressing Enter fills the rest, so it's fully lit when the unlock takes over, and a wrong password breaks it apart. There are seven more [typing effects](#typing-effects), or *shuffle* for a different one each time you lock. They only follow how many characters you've typed, like the dots do, never what they are.
 - **A wrong password is handled calmly.** A short shake and `ACCESS DENIED · ATTEMPT 2` under the field. From the third try, one helpful hint: "Caps Lock is on", or which keyboard layout is active if you have several. A small `⇪ CAPS` badge shows whenever Caps Lock is on.
 - **Power-down on lock:** the screen collapses like an old CRT turning off. With several monitors it ripples across them.
@@ -66,7 +67,7 @@ omarchy-shell lock settings
 
 <p align="center"><img src="docs/settings.png" alt="The settings window: a sidebar of sections and the unlock symbol grid" width="720"></p>
 
-Every option is on one page, grouped in a sidebar: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol and the gold unlock), **Typing**, **Lock screen** (clock, power-down, motion), **Sound** (on/off, volume, quiet hours) and **Weather**. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. **Play unlock** and **Preview** show the result without locking. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections.
+Every option is on one page, grouped in a sidebar: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol and the gold unlock), **Typing**, **Lock screen** (clock, power-down, motion), **Sound** (on/off, volume, quiet hours), **Presets** (saved looks and rotation) and **Weather**. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. **Play unlock** and **Preview** show the result without locking. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections.
 
 A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows as **Custom**. If you try a built-in symbol, you can switch back to Custom until you close the window.
 
@@ -75,6 +76,44 @@ To open it from the Omarchy menu, add this line to `~/.config/omarchy/extensions
 ```jsonc
 "style.lockscreen": {"icon":"","label":"Lock Screen","action":"omarchy-shell lock settings"},
 ```
+
+## Brand presets
+
+<p align="center"><img src="docs/presets.png" alt="The Presets section: four saved looks and the On each lock choice set to Cycle presets" width="720"></p>
+
+Open `omarchy-shell lock settings` and select **Presets**. Set your brand text in
+**You**, choose a logo in **Logo** and a symbol in **Unlock**, then give the
+combination a name and choose **Save new**. Names such as “Company / Primary” and
+“Company / Alternate” keep multiple versions easy to identify.
+
+- **Use** restores a saved combination; **Use next** advances in saved order.
+- **Update selected** replaces that preset with your current branding and name.
+  Editing branding does not change the saved preset until you update it.
+- **Delete selected** asks for confirmation and leaves current branding intact.
+- **On each lock** chooses current branding, cycling in saved order, or shuffling
+  without an immediate repeat when at least two presets exist. All saved presets
+  participate. A single preset stays fixed; an empty collection uses current branding.
+
+Presets include brand text, logo/wordmark, tint and the unlock symbol (including
+two-part custom symbols). Name, birthday, typing effect, motion, sound and weather
+remain independent. Preset images are copied into Hello Lock’s private config
+folder, so moving the original image does not break a saved preset. Deleting a
+preset retains image files for other presets and config backups.
+
+Rotation chooses once per lock and keeps the branding through unlock. Previews
+and repeated lock requests do not advance it. The rotation position is kept in
+memory; after a shell restart, cycling resumes after the manually selected preset.
+Using a preset, changing rotation mode or changing the collection resets that
+starting point. Presets live in `~/.config/hello-lock/config.json` as
+`brandingPresets`, `selectedPreset` and `presetMode`; normal config backups cover them.
+
+For scripting: `bin/hello-config preset create "Company / Primary"`,
+`preset update "New name"`, `preset apply ID`, `preset next ""`,
+`preset delete ID`, and `preset mode manual|cycle|shuffle`. Each successful command
+prints the updated config. Settings waits for pending edits and image/wordmark work
+before running a preset operation.
+
+If you edit `config.json` by hand and a preset entry is malformed, Hello Lock skips it on the lock screen and in Settings without touching your other settings, and the preset commands refuse to save until it is fixed.
 
 ## Install
 
@@ -126,6 +165,9 @@ Create `~/.config/hello-lock/config.json`. Every field is optional, and changes 
 | `clock` | `true` | The clock and date on the lock screen. |
 | `typingEffect` | `"cells"` | What the logo does while you type: `"cells"`, `"scanline"`, `"liquid"`, `"decrypt"`, `"equalizer"`, `"sweep"`, `"pulse"`, `"off"`, or `"shuffle"` for a different one each lock (see [Typing effects](#typing-effects)). |
 | `motion` | `"auto"` | Calmer animations: fades instead of big motion, on the lock screen and the unlock. `"auto"` follows Hyprland's `animations:enabled`, `"full"` always animates, `"reduced"` always calms. |
+| `brandingPresets` | `[]` | Saved looks. Written by Settings → Presets; see [Brand presets](#brand-presets). |
+| `selectedPreset` | `""` | The id of the preset in use. |
+| `presetMode` | `"manual"` | What happens on each lock: `"manual"` keeps the current branding, `"cycle"` goes through the presets in order, `"shuffle"` picks one without repeating the last. |
 
 Relative paths are looked up in `~/.config/hello-lock/`, so you can drop your logo there and write `"logo": "logo.svg"`.
 
@@ -203,6 +245,7 @@ Omarchy's stock lock screen comes back.
 
 ## Notes
 
+- What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 - Hello Lock is a copy of Omarchy's lock service with the visuals added on top. If Omarchy fixes something in its own lock screen, that fix won't reach Hello Lock until Hello Lock is updated.
 - The multi-monitor timing (power-down ripple, quieter unlock on other screens) is built for several monitors but so far has only been tested on a single laptop screen.
 - Requires Omarchy's Quickshell-based shell. It uses `grim` (power-down effect), `pw-play` or `paplay` (sounds) and `python3` (status line), which ship with Omarchy.
@@ -243,47 +286,3 @@ The settings-close regression check requires a running Wayland desktop. It uses
 disposable settings and Settings.qml only to check debounced writes before close
 or setup, reopening, custom-symbol restoration, and failed-write behavior. It does
 not load the lock service or exercise native mouse interactions.
-
-
-### Brand presets
-
-Open `omarchy-shell lock settings` and select **Presets**. Set your brand text in
-**You**, choose a logo in **Logo** and a symbol in **Unlock**, then give the
-combination a name and choose **Save new**. Names such as “Company / Primary” and
-“Company / Alternate” keep multiple versions easy to identify.
-
-- **Use** restores a saved combination; **Use next** advances in saved order.
-- **Update selected** replaces that preset with your current branding and name.
-  Editing branding does not change the saved preset until you update it.
-- **Delete selected** asks for confirmation and leaves current branding intact.
-- **On each lock** chooses current branding, cycling in saved order, or shuffling
-  without an immediate repeat when at least two presets exist. All saved presets
-  participate. A single preset stays fixed; an empty collection uses current branding.
-
-Presets include brand text, logo/wordmark, tint and the unlock symbol (including
-two-part custom symbols). Name, birthday, typing effect, motion, sound and weather
-remain independent. Preset images are copied into Hello Lock’s private config
-folder, so moving the original image does not break a saved preset. Deleting a
-preset retains image files for other presets and config backups.
-
-Rotation chooses once per lock and keeps the branding through unlock. Previews
-and repeated lock requests do not advance it. The rotation position is kept in
-memory; after a shell restart, cycling resumes after the manually selected preset.
-Using a preset, changing rotation mode or changing the collection resets that
-starting point. Presets live in `~/.config/hello-lock/config.json` as
-`brandingPresets`, `selectedPreset` and `presetMode`; normal config backups cover them.
-
-For scripting: `bin/hello-config preset create "Company / Primary"`,
-`preset update "New name"`, `preset apply ID`, `preset next ""`,
-`preset delete ID`, and `preset mode manual|cycle|shuffle`. Each successful command
-prints the updated config. Settings waits for pending edits and image/wordmark work
-before running a preset operation.
-
-
-Preset fixes in 0.3.1: unlock previews use current branding, while real unlocks
-retain the selection used for that lock. A failed preset operation keeps the
-window open on the first close attempt so its error remains visible; retrying
-or closing again is supported. Invalid preset entries are ignored by the UI
-and rotation without changing the stored collection or interrupting personal
-settings. The helper rejects malformed preset collections on preset writes;
-repair the invalid entries in config.json before saving presets again.
