@@ -362,5 +362,133 @@ class Menu(unittest.TestCase):
         self.assertEqual(self.menu.read_text(), '{ "a": ')
 
 
+class MenuBackups(unittest.TestCase):
+    """hello-menu backups are owner-only (0600) from creation, whatever the umask."""
+
+    ORIGINAL = '{\n  // private\n  "trigger.x": {"label": "X", "action": "echo secret"}\n}\n'
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.env = dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / "config"))
+        self.menu = self.home / "config/omarchy/extensions/omarchy-menu.jsonc"
+        self.menu.parent.mkdir(parents=True)
+        self.menu.write_text(self.ORIGINAL)
+        self.menu.chmod(0o600)
+        self.helper = load_helper("hello-menu")
+        self.helper.MENU = str(self.menu)
+
+    def run_menu(self, action, umask=0o022):
+        return subprocess.run([str(ROOT / "bin" / "hello-menu"), action], env=self.env,
+                              capture_output=True, text=True, timeout=5,
+                              preexec_fn=lambda: os.umask(umask))
+
+    def backups(self):
+        return sorted(self.menu.parent.glob("omarchy-menu.jsonc.bak.hello-lock.*"))
+
+    def mode(self, path):
+        return os.lstat(path).st_mode & 0o777
+
+    def fixed_stamp(self, stamp="20260101-000000-000000"):
+        fake = mock.Mock()
+        fake.datetime.now.return_value.strftime.return_value = stamp
+        return mock.patch.object(self.helper, "datetime", fake)
+
+    def test_private_source_under_umask_022(self):
+        result = self.run_menu("add", umask=0o022)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        [backup] = self.backups()
+        self.assertEqual(self.mode(backup), 0o600)
+        self.assertEqual(backup.read_text(), self.ORIGINAL)
+        self.assertEqual(self.mode(self.menu), 0o600)  # the menu keeps its own mode
+
+    def test_policy_holds_under_permissive_umask_and_open_source(self):
+        self.menu.chmod(0o644)
+        for umask in (0o000, 0o002):
+            for action in ("add", "remove"):
+                result = self.run_menu(action, umask=umask)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.backups()), 3)
+        for backup in self.backups():
+            self.assertEqual(self.mode(backup), 0o600)
+        self.assertEqual(self.mode(self.menu), 0o644)
+
+    def test_strict_umask_still_leaves_a_readable_backup(self):
+        result = self.run_menu("add", umask=0o277)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        [backup] = self.backups()
+        self.assertEqual(self.mode(backup), 0o600)
+        self.assertEqual(backup.read_text(), self.ORIGINAL)
+
+    def test_failed_replacement_keeps_the_original_and_a_private_backup(self):
+        old = os.umask(0o022)
+        self.addCleanup(os.umask, old)
+        with mock.patch.object(self.helper.os, "replace", side_effect=OSError("disk full")):
+            with self.assertRaises(self.helper.Unsafe):
+                self.helper.add()
+        self.assertEqual(self.menu.read_text(), self.ORIGINAL)
+        self.assertEqual(self.mode(self.menu), 0o600)
+        [backup] = self.backups()
+        self.assertEqual(self.mode(backup), 0o600)
+        self.assertEqual(backup.read_text(), self.ORIGINAL)
+        self.assertEqual(list(self.menu.parent.glob(".omarchy-menu.*")), [])  # no temp file left
+
+    def test_existing_backup_path_is_never_overwritten_or_followed(self):
+        victim = self.home / "victim"
+        victim.write_text("unrelated")
+        victim.chmod(0o644)
+        stamp = "20260101-000000-000000"
+        planted = Path(str(self.menu) + ".bak.hello-lock." + stamp)
+        missing = self.home / "would-be-created"
+        for setup in (lambda: planted.write_text("unrelated"),
+                      lambda: planted.symlink_to(victim),
+                      lambda: planted.symlink_to(missing)):
+            setup()
+            with self.fixed_stamp(stamp), self.assertRaises(self.helper.Unsafe):
+                self.helper.add()
+            self.assertEqual(self.menu.read_text(), self.ORIGINAL)
+            planted.unlink()
+        self.assertEqual(victim.read_text(), "unrelated")
+        self.assertEqual(self.mode(victim), 0o644)
+        self.assertFalse(missing.exists())
+
+    def test_rotation_ignores_symlinks_and_tightens_old_backups(self):
+        victim = self.home / "victim"
+        victim.write_text("unrelated")
+        victim.chmod(0o644)
+        prefix = str(self.menu) + ".bak.hello-lock."
+        link = Path(prefix + "00000000-000000-000000")  # oldest name: first to be pruned
+        link.symlink_to(victim)
+        legacy = Path(prefix + "20250101-000000-000000")  # as written by 0.4.0/0.5.0
+        legacy.write_text(self.ORIGINAL)
+        legacy.chmod(0o644)
+        result = self.run_menu("add")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual((victim.read_text(), self.mode(victim)), ("unrelated", 0o644))
+        self.assertEqual(self.mode(legacy), 0o600)
+        for _ in range(3):
+            self.run_menu("remove")
+            self.run_menu("add")
+        regular = [b for b in self.backups() if not b.is_symlink()]
+        self.assertEqual(len(regular), 3)
+        self.assertNotIn(legacy, regular)
+        self.assertTrue(link.is_symlink())
+
+    def test_add_remove_and_rollback_from_backup(self):
+        self.assertEqual(self.run_menu("add").stdout.strip(), "on")
+        self.assertEqual(self.run_menu("status").stdout.strip(), "on")
+        self.assertEqual(self.run_menu("remove").stdout.strip(), "off")
+        self.assertEqual(self.helper.parse(self.menu.read_text()), self.helper.parse(self.ORIGINAL))
+        first = self.backups()[0]
+        self.assertEqual(first.read_text(), self.ORIGINAL)
+        self.run_menu("add")
+        self.menu.write_text(first.read_text())  # restoring by hand from the backup
+        self.assertEqual(self.run_menu("status").stdout.strip(), "off")
+        self.assertEqual(self.helper.parse(self.menu.read_text()),
+                         {"trigger.x": {"label": "X", "action": "echo secret"}})
+
+
 if __name__ == "__main__":
     unittest.main()
