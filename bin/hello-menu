@@ -1,0 +1,250 @@
+#!/usr/bin/env -S python3 -I
+"""Add or remove Hello Lock's entry in the Omarchy menu (Style > Lock Screen).
+
+Usage: hello-menu status   print on, off, other or unreadable
+       hello-menu add      add the entry (prints on)
+       hello-menu remove   remove Hello Lock's entry (prints off)
+
+The entry lives in the user's ~/.config/omarchy/extensions/omarchy-menu.jsonc,
+which Omarchy reads alongside its own menu. Only one line is added or removed:
+comments, formatting and every other entry are kept. The previous file is
+backed up first, and the result is parsed before it is written; if anything
+doesn't check out, the file is left untouched.
+
+"other" means the menu already has a Style > Lock Screen entry that doesn't open
+Hello Lock's settings; it is never changed. The entry hides itself if Hello Lock
+is removed, so a leftover line is harmless.
+
+Exit codes: 0 done, 3 another entry is in the way, 4 the menu file can't be
+read or edited safely.
+"""
+import datetime
+import glob
+import json
+import os
+import sys
+import tempfile
+
+MENU = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                    "omarchy", "extensions", "omarchy-menu.jsonc")
+KEY = "style.lockscreen"
+ACTION = "omarchy-shell lock settings"
+ENTRY = {
+    "icon": "",
+    "label": "Lock Screen",
+    "description": "Hello Lock settings",
+    "aliases": ["lock screen", "hello lock"],
+    "when": "[[ -d ~/.config/omarchy/plugins/hello-lock ]]",
+    "action": ACTION,
+}
+COMMENT = "// Added by Hello Lock: opens its settings. Turn off in Settings > Lock screen."
+KEEP_BACKUPS = 3
+
+
+class Unsafe(Exception):
+    pass
+
+
+def scan(text):
+    """Tokenize JSONC just enough to edit it: yield (kind, start, end, depth).
+
+    kind is "str", "comment", "punct" (one of {}[]:,) or "other" (numbers,
+    literals). depth is the nesting depth before the token.
+    """
+    i, depth, n = 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\r\n":
+            i += 1
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            if j >= n:
+                raise Unsafe("unterminated string")
+            yield "str", i, j + 1, depth
+            i = j + 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            yield "comment", i, j, depth
+            i = j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            if j < 0:
+                raise Unsafe("unterminated comment")
+            yield "comment", i, j + 2, depth
+            i = j + 2
+        elif c in "{[":
+            yield "punct", i, i + 1, depth
+            depth += 1
+            i += 1
+        elif c in "}]":
+            depth -= 1
+            if depth < 0:
+                raise Unsafe("unbalanced brackets")
+            yield "punct", i, i + 1, depth
+            i += 1
+        elif c in ":,":
+            yield "punct", i, i + 1, depth
+            i += 1
+        else:
+            j = i
+            while j < n and text[j] not in ' \t\r\n"{}[]:,/':
+                j += 1
+            if j == i:
+                raise Unsafe("unexpected character")
+            yield "other", i, j, depth
+            i = j
+
+
+def parse(text):
+    """Parse JSONC: drop comments and trailing commas, then json.loads."""
+    tokens = [t for t in scan(text) if t[0] != "comment"]
+    out = []
+    for k, (kind, a, b, _) in enumerate(tokens):
+        piece = text[a:b]
+        if piece == "," and k + 1 < len(tokens) and text[tokens[k + 1][1]] in "}]":
+            continue
+        out.append(piece)
+    try:
+        data = json.loads(" ".join(out))
+    except ValueError as e:
+        raise Unsafe("not valid JSONC: %s" % e)
+    if not isinstance(data, dict):
+        raise Unsafe("the menu file is not an object")
+    return data
+
+
+def state(data):
+    entry = data.get(KEY)
+    if entry is None:
+        return "off"
+    if isinstance(entry, dict) and ACTION in str(entry.get("action", "")):
+        return "on"
+    return "other"
+
+
+def read():
+    try:
+        with open(MENU, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as e:
+        raise Unsafe(str(e))
+
+
+def write(old, new, check):
+    data = parse(new)
+    if state(data) != check:
+        raise Unsafe("the edit didn't come out as expected")
+    os.makedirs(os.path.dirname(MENU), exist_ok=True)
+    if old is not None:
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup = MENU + ".bak.hello-lock." + stamp
+        with open(backup, "w", encoding="utf-8") as f:
+            f.write(old)
+        for extra in sorted(glob.glob(MENU + ".bak.hello-lock.*"))[:-KEEP_BACKUPS]:
+            os.remove(extra)
+    mode = os.stat(MENU).st_mode & 0o777 if old is not None else 0o644
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(MENU), prefix=".omarchy-menu.")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(new)
+    os.chmod(tmp, mode)
+    os.replace(tmp, MENU)
+
+
+def entry_line():
+    return "  " + COMMENT + "\n  " + json.dumps(KEY) + ": " + json.dumps(ENTRY, ensure_ascii=False, separators=(",", ":")) + ",\n"
+
+
+def add():
+    text = read()
+    if text is None:
+        write(None, "{\n" + entry_line() + "}\n", "on")
+        return "on"
+    current = state(parse(text))
+    if current != "off":
+        return current
+    tokens = [t for t in scan(text) if t[0] != "comment"]
+    close = next((t for t in reversed(tokens) if t[0] == "punct" and t[3] == 0 and text[t[1]] == "}"), None)
+    if close is None:
+        raise Unsafe("no closing brace")
+    close_at = close[1]
+    # Insert on its own line just above the closing brace.
+    line_start = text.rfind("\n", 0, close_at) + 1
+    own_line = text[line_start:close_at].strip() == ""
+    insert_at = line_start if own_line else close_at
+    head, tail = text[:insert_at], text[insert_at:]
+    if not own_line:
+        head += "\n"
+    last = [t for t in tokens if t[1] < close_at][-1]
+    if text[last[1]] not in "{,":
+        # The last entry has no trailing comma: add one right after its value.
+        head = head[:last[2]] + "," + head[last[2]:]
+    write(text, head + entry_line() + tail, "on")
+    return "on"
+
+
+def remove():
+    text = read()
+    if text is None:
+        return "off"
+    current = state(parse(text))
+    if current != "on":
+        return current
+    tokens = [t for t in scan(text) if t[0] != "comment"]
+    for k, (kind, a, b, depth) in enumerate(tokens):
+        if kind == "str" and depth == 1 and json.loads(text[a:b]) == KEY \
+                and k + 1 < len(tokens) and text[tokens[k + 1][1]] == ":":
+            # The value runs to the matching close; then an optional comma.
+            j = k + 2
+            while j < len(tokens) and not (tokens[j][3] == 1 and text[tokens[j][1]] in "}]"):
+                j += 1
+            end = tokens[j][2]
+            if j + 1 < len(tokens) and text[tokens[j + 1][1]] == ",":
+                end = tokens[j + 1][2]
+            start = a
+            line_start = text.rfind("\n", 0, start) + 1
+            if text[line_start:start].strip() == "":
+                start = line_start
+                line_end = text.find("\n", end)
+                if line_end >= 0 and text[end:line_end].strip() == "":
+                    end = line_end + 1
+                # Our own comment line directly above goes too.
+                prev_start = text.rfind("\n", 0, max(0, start - 1)) + 1
+                if text[prev_start:start].strip() == COMMENT:
+                    start = prev_start
+            new = text[:start] + text[end:]
+            write(text, new, "off")
+            return "off"
+    raise Unsafe("couldn't find the entry to remove")
+
+
+def main(argv):
+    if len(argv) != 2 or argv[1] not in ("status", "add", "remove"):
+        print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+        return 2
+    try:
+        if argv[1] == "status":
+            text = read()
+            result = "off" if text is None else state(parse(text))
+        elif argv[1] == "add":
+            result = add()
+        else:
+            result = remove()
+    except Unsafe as e:
+        print("unreadable")
+        print("hello-menu: %s is left unchanged (%s)" % (MENU, e), file=sys.stderr)
+        return 4
+    print(result)
+    if result == "other" and argv[1] != "status":
+        print("hello-menu: the Omarchy menu already has its own Style > Lock Screen entry; it is left unchanged",
+              file=sys.stderr)
+        return 3
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

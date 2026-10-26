@@ -45,7 +45,7 @@ The first time the shell starts with Hello Lock, a short setup screen opens. It 
 
 <p align="center"><img src="docs/onboarding.gif" alt="The setup screen: typing a wordmark, trying styles, picking an unlock symbol" width="620"></p>
 
-Then **Save and try it** plays your unlock animation. Enter goes forward and Esc goes back. On the logo step, ↑/↓ switch options and Tab / Shift+Tab change the wordmark style. On the symbol step, ←/→ move along a row, ↑/↓ change rows, and the symbol's name shows below the grid. On the typing step, ←/→ or Tab pick the effect. Run the setup again any time, or use [Settings](#settings) to change one thing:
+The last step also offers to add **Lock Screen** to the Omarchy menu, under **Style**, so you can come back to the settings without a terminal (it's ticked; untick it to leave your menu alone). Then **Save and try it** plays your unlock animation. Enter goes forward and Esc goes back. On the logo step, ↑/↓ switch options and Tab / Shift+Tab change the wordmark style. On the symbol step, ←/→ move along a row, ↑/↓ change rows, and the symbol's name shows below the grid. On the typing step, ←/→ or Tab pick the effect. Run the setup again any time, or use [Settings](#settings) to change one thing:
 
 ```bash
 omarchy-shell lock onboarding
@@ -59,7 +59,7 @@ refuses to replace malformed or unreadable settings.
 
 ## Settings
 
-Change anything later in one window, with no steps to click through:
+Change anything later in one window, with no steps to click through. Open it from the Omarchy menu (**Super + Alt + Space**) under **Style → Lock Screen**, or from a terminal:
 
 ```bash
 omarchy-shell lock settings
@@ -71,11 +71,7 @@ Every option is on one page, grouped in a sidebar: **You** (name, birthday, the 
 
 A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows as **Custom**. If you try a built-in symbol, you can switch back to Custom until you close the window.
 
-To open it from the Omarchy menu, add this line to `~/.config/omarchy/extensions/omarchy-menu.jsonc`. It appears under **Style**:
-
-```jsonc
-"style.lockscreen": {"icon":"","label":"Lock Screen","action":"omarchy-shell lock settings"},
-```
+**Style → Lock Screen** is added by the setup if you leave its box ticked, and **Settings → Lock screen → Show in the Omarchy menu** turns it on or off any time. It is one line in your own `~/.config/omarchy/extensions/omarchy-menu.jsonc`: Hello Lock keeps everything else in that file, saves a backup before each change, and leaves the file alone if it can't read it or if you already have your own **Style → Lock Screen** entry. The line hides itself when Hello Lock isn't installed. From a terminal: `bin/hello-menu status`, `add` or `remove` in the plugin folder.
 
 ## Brand presets
 
@@ -121,6 +117,8 @@ If you edit `config.json` by hand and a preset entry is malformed, Hello Lock sk
 omarchy plugin add https://github.com/denonmaryland/hello-lock.git --enable
 omarchy restart shell
 ```
+
+After the restart, a short setup opens. Afterwards, open the settings from the Omarchy menu under **Style → Lock Screen** (the setup offers to add it) or with `omarchy-shell lock settings`.
 
 Hello Lock replaces Omarchy's built-in lock screen; enabling it switches the stock one off. Your password checking is the same PAM code Omarchy uses. Lock services only load on a shell restart, hence the second command.
 
@@ -237,11 +235,12 @@ Each effect is one QML file in `typing/` that follows a small contract, describe
 ## Uninstall
 
 ```bash
+~/.config/omarchy/plugins/hello-lock/bin/hello-menu remove   # only if you added the menu entry
 omarchy plugin remove hello-lock
 omarchy restart shell
 ```
 
-Omarchy's stock lock screen comes back.
+Omarchy's stock lock screen comes back. If you skip the first line, the **Style → Lock Screen** entry simply stops showing once Hello Lock is gone; you can delete its line from `~/.config/omarchy/extensions/omarchy-menu.jsonc` whenever you like.
 
 ## Notes
 

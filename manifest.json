@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "hello-lock",
   "name": "Hello Lock",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "author": "DeNon Maryland",
   "description": "A lock screen that greets you: your name and logo, a power-down on lock, and one of eleven power-on animations with a greeting on every unlock.",
   "omarchy": {

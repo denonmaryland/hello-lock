@@ -116,6 +116,11 @@ ShellRoot {
       setup.item.step = 3
       return "ok"
     }
+    function step(n: int): string {
+      if (!setup.item) return "unavailable"
+      setup.item.step = n
+      return "ok"
+    }
     function saveSetup(): string {
       if (!setup.item || !setup.item.wordmarkReady) return "unavailable"
       setup.item.save()

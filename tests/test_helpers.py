@@ -297,5 +297,63 @@ class Snapshots(unittest.TestCase):
         self.assertTrue(Path(recent["directory"]).exists())
 
 
+class Menu(unittest.TestCase):
+    """bin/hello-menu edits only its own line of the user's Omarchy menu."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        home = Path(self.temp.name)
+        self.env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"))
+        self.menu = home / "config/omarchy/extensions/omarchy-menu.jsonc"
+
+    def run_menu(self, action):
+        return subprocess.run([str(ROOT / "bin" / "hello-menu"), action], env=self.env,
+                              capture_output=True, text=True, timeout=5)
+
+    def parsed(self):
+        return load_helper("hello-menu").parse(self.menu.read_text())
+
+    def test_creates_the_file_and_removes_cleanly(self):
+        self.assertEqual(self.run_menu("status").stdout.strip(), "off")
+        self.assertEqual(self.run_menu("add").stdout.strip(), "on")
+        entry = self.parsed()["style.lockscreen"]
+        self.assertEqual(entry["action"], "omarchy-shell lock settings")
+        self.assertIn("plugins/hello-lock", entry["when"])
+        self.assertEqual(self.run_menu("remove").stdout.strip(), "off")
+        self.assertEqual(self.parsed(), {})
+
+    def test_keeps_comments_and_other_entries(self):
+        self.menu.parent.mkdir(parents=True)
+        original = '{\n  // mine\n  "trigger.x": {"label": "X", "action": "echo x"} /* note */\n}\n'
+        self.menu.write_text(original)
+        self.assertEqual(self.run_menu("add").returncode, 0)
+        self.assertIn("// mine", self.menu.read_text())
+        self.assertEqual(set(self.parsed()), {"trigger.x", "style.lockscreen"})
+        self.assertEqual(self.run_menu("add").stdout.strip(), "on")  # idempotent
+        self.assertEqual(self.menu.read_text().count("style.lockscreen"), 1)
+        self.run_menu("remove")
+        self.assertEqual(self.parsed(), {"trigger.x": {"label": "X", "action": "echo x"}})
+        backups = list(self.menu.parent.glob("omarchy-menu.jsonc.bak.hello-lock.*"))
+        self.assertTrue(backups)
+        self.assertIn(original, [b.read_text() for b in backups])
+
+    def test_leaves_someone_elses_entry_alone(self):
+        self.menu.parent.mkdir(parents=True)
+        mine = '{ "style.lockscreen": {"label": "Mine", "action": "hyprlock"} }\n'
+        self.menu.write_text(mine)
+        for action in ("add", "remove"):
+            result = self.run_menu(action)
+            self.assertEqual((result.returncode, result.stdout.strip()), (3, "other"))
+        self.assertEqual(self.menu.read_text(), mine)
+
+    def test_never_writes_a_broken_file(self):
+        self.menu.parent.mkdir(parents=True)
+        self.menu.write_text('{ "a": ')
+        result = self.run_menu("add")
+        self.assertEqual((result.returncode, result.stdout.strip()), (4, "unreadable"))
+        self.assertEqual(self.menu.read_text(), '{ "a": ')
+
+
 if __name__ == "__main__":
     unittest.main()

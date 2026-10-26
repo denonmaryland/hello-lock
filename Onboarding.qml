@@ -131,6 +131,11 @@ Item {
   property string wordmarkError: ""
   property string imagePath: ""
   property bool tintImage: true
+  // Omarchy menu entry (Style > Lock Screen) for reopening settings later:
+  // "on", "off", "other" (a different entry is there) or "unreadable".
+  property string menuState: ""
+  property bool addToMenu: true
+  readonly property bool menuShortcut: menuState === "on" || (menuState === "off" && addToMenu)
   property bool picking: false
   property string saveError: ""
   property bool saving: false
@@ -171,6 +176,9 @@ Item {
     typingEffect = typeof c.typingEffect === "string" && typingEffectIds.indexOf(c.typingEffect) >= 0 ? c.typingEffect : "cells"
     if (c.motion === "reduced") reducedMotion = true
     scanEffects()
+    addToMenu = true
+    menuState = ""
+    menuStatusProc.running = true
     step = 0
   }
 
@@ -227,7 +235,9 @@ Item {
     }
     saving = true
     saveError = ""
-    saveProc.command = ["sh", "-c", '"$0" save "$1" && "$0" done', pluginDir + "/bin/hello-config", JSON.stringify(update)]
+    saveProc.command = ["sh", "-c", '"$0" save "$1" && "$0" done && if [ "$2" = 1 ]; then "$3" add >/dev/null 2>&1 || true; fi',
+      pluginDir + "/bin/hello-config", JSON.stringify(update),
+      menuState === "off" && addToMenu ? "1" : "0", pluginDir + "/bin/hello-menu"]
     saveProc.running = true
   }
 
@@ -323,6 +333,13 @@ Item {
             .map(function(f) { return f.slice(0, -4) })
         : []
     }
+  }
+
+  Process {
+    id: menuStatusProc
+    command: [root.pluginDir + "/bin/hello-menu", "status"]
+    stdout: StdioCollector { id: menuStatusOut; waitForEnd: true }
+    onExited: root.menuState = String(menuStatusOut.text || "").trim()
   }
 
   Process {
@@ -700,7 +717,8 @@ Item {
                 : "Keep the Omarchy logo. You can change it later.",
               "It plays when you unlock: your logo, the Omarchy symbol or a console insignia.",
               root.typingEffects[Math.max(0, root.typingEffectIds.indexOf(root.typingEffect))].hint,
-              "Lock with Super + Ctrl + L to see it. Change anything later with  omarchy-shell lock settings ."
+              root.menuShortcut ? "Lock with Super + Ctrl + L to see it.\nChange anything later: Omarchy menu → Style → Lock Screen."
+                : "Lock with Super + Ctrl + L to see it.\nChange anything later with  omarchy-shell lock settings ."
             ][content.shownStep]
             color: Qt.rgba(root.text.r, root.text.g, root.text.b, 0.7)
             font.family: "Oxanium"
@@ -956,6 +974,15 @@ Item {
             TextButton {
               label: (root.tintImage ? "◉" : "○") + "  Match my theme colors"
               onClicked: root.tintImage = !root.tintImage
+            }
+          }
+
+          Row {
+            visible: content.shownStep === 6 && root.menuState === "off"
+            anchors.horizontalCenter: parent.horizontalCenter
+            TextButton {
+              label: (root.addToMenu ? "◉" : "○") + "  Add Lock Screen to the Omarchy menu, under Style"
+              onClicked: root.addToMenu = !root.addToMenu
             }
           }
 

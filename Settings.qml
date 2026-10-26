@@ -191,6 +191,7 @@ Item {
     sounds = c.sounds !== false
     weather = c.weather !== false
     soundGetProc.running = true
+    menuStatusProc.running = true
     savedOnce = false
     status = invalidPresets ? "Some presets are invalid and were ignored. Your other settings are loaded." : ""
     sectionIndex = 0
@@ -220,7 +221,7 @@ Item {
     onTriggered: {
       if (saveTimer.running || saveProc.running || Object.keys(root.pending).length
           || soundTimer.running || soundSaveProc.running || Object.keys(root.soundPending).length
-          || wordmarkTimer.running || wordmarkProc.running || importProc.running) return
+          || wordmarkTimer.running || wordmarkProc.running || importProc.running || menuProc.running) return
       stop()
       if (root.saveFailed || root.wordmarkError) {
         root.presetFailed = true
@@ -272,7 +273,7 @@ Item {
     onTriggered: {
       if (presetWait.running || presetProc.running || saveTimer.running || saveProc.running || Object.keys(root.pending).length
           || soundTimer.running || soundSaveProc.running || Object.keys(root.soundPending).length
-          || wordmarkTimer.running || wordmarkProc.running || importProc.running) return
+          || wordmarkTimer.running || wordmarkProc.running || importProc.running || menuProc.running) return
       stop()
       var action = root.exitAction
       root.exitAction = ""
@@ -281,6 +282,32 @@ Item {
       if (root.saveFailed || root.presetFailed) { root.saveFailed = false; root.presetFailed = false; return }
       if (action === "setup") root.setupRequested()
       else root.closed()
+    }
+  }
+
+  // ---- The Omarchy menu entry (Style > Lock Screen) that opens this window.
+  // "on", "off", "other" (a different entry is there) or "unreadable".
+  property string menuState: ""
+  Process {
+    id: menuStatusProc
+    command: [root.pluginDir + "/bin/hello-menu", "status"]
+    stdout: StdioCollector { id: menuStatusOut; waitForEnd: true }
+    onExited: root.menuState = String(menuStatusOut.text || "").trim()
+  }
+  function setMenu(on) {
+    if (menuProc.running) return
+    menuProc.command = [pluginDir + "/bin/hello-menu", on ? "add" : "remove"]
+    status = "saving"
+    menuProc.running = true
+  }
+  Process {
+    id: menuProc
+    stdout: StdioCollector { id: menuOut; waitForEnd: true }
+    stderr: StdioCollector { id: menuErr; waitForEnd: true }
+    onExited: function(code) {
+      root.menuState = String(menuOut.text || "").trim()
+      if (code === 0) { root.status = "saved"; savedFade.restart() }
+      else root.status = String(menuErr.text || "Couldn't change the Omarchy menu.").replace(/^hello-menu: /, "").trim()
     }
   }
 
@@ -1048,6 +1075,26 @@ Item {
                   }
                 }
                 Button { focusable: true; text: "Preview the lock screen"; bordered: true; onClicked: root.lockPreviewRequested("") }
+
+                Toggle {
+                  visible: root.menuState === "on" || root.menuState === "off"
+                  width: parent.width
+                  label: "Show in the Omarchy menu"
+                  description: "Adds Lock Screen under Style in the Omarchy menu, so you can open these settings without a terminal."
+                  checked: root.menuState === "on"
+                  onClicked: root.setMenu(root.menuState !== "on")
+                }
+                Text {
+                  visible: root.menuState === "other" || root.menuState === "unreadable"
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  text: root.menuState === "other"
+                    ? "Your Omarchy menu already has its own Style → Lock Screen entry, so Hello Lock leaves it alone. Open these settings with  omarchy-shell lock settings ."
+                    : "Hello Lock couldn't read your Omarchy menu file, so it isn't changed. Open these settings with  omarchy-shell lock settings ."
+                  color: root.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
               }
 
               // ---- Sound.

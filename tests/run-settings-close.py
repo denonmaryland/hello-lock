@@ -59,12 +59,17 @@ ShellRoot {
    else if (kind === "failed-preset-close") {
     i.runPreset("create", "Existing"); i.requestExit("close")
    }
+   else if (kind === "menu-on-close") { i.setMenu(true); i.requestExit("close") }
+   else if (kind === "menu-off-close") { i.setMenu(false); i.requestExit("close") }
    else if (kind === "close") i.requestExit("close")
    else if (kind === "birthday") {
     i.birthMonth = "1"; i.birthDay = "14"; i.saveBirthday()
     i.birthMonth = "13"; i.saveBirthday(); i.requestExit("close")
    }
    return "ok"
+  }
+  function section(id: string): string {
+   settings.item.sectionIndex = settings.item.sections.findIndex(function(s) { return s.id === id }); return "ok"
   }
   function preset(action: string, value: string): string {
    settings.item.sectionIndex = settings.item.sections.findIndex(function(s) { return s.id === "presets" })
@@ -76,6 +81,7 @@ ShellRoot {
     presetBusy: settings.item ? settings.item.presetBusy : false,
     selectedPreset: settings.item ? settings.item.selectedPreset : "",
     presets: settings.item ? settings.item.brandingPresets : [],
+    menuState: settings.item ? settings.item.menuState : "",
     status: settings.item ? settings.item.status : "closed"})
   }
   function quit(): string { Qt.quit(); return "ok" }
@@ -165,6 +171,17 @@ class SettingsClose(unittest.TestCase):
         self.assertTrue(json.loads(self.call("status"))["active"])
         self.call("edit", "close")
         self.wait_for(lambda: not json.loads(self.call("status"))["active"])
+
+    def test_menu_toggle_finishes_before_close(self):
+        menu = self.root / "config/omarchy/extensions/omarchy-menu.jsonc"
+        self.open()
+        self.wait_for(lambda: json.loads(self.call("status"))["menuState"] == "off")
+        self.edit_close("menu-on-close")
+        self.assertIn('"action":"omarchy-shell lock settings"', menu.read_text())
+        self.open()
+        self.wait_for(lambda: json.loads(self.call("status"))["menuState"] == "on")
+        self.edit_close("menu-off-close")
+        self.assertNotIn("style.lockscreen", menu.read_text())
 
     def test_invalid_presets_do_not_interrupt_personal_settings(self):
         for bad in ([None], [{"id": "a", "name": 7, "branding": {}}], "not a list"):
