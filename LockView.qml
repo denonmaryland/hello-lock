@@ -36,6 +36,13 @@ Item {
   readonly property color glitchRed: "#ff4d5e"
   // Must match UnlockSplash's stageDim so the handoff frame is identical.
   readonly property real unlockStageDim: 0.5
+  // Logo glow at the handoff. Must match UnlockSplash's markGlow.
+  readonly property real unlockLogoGlow: 0.3
+  // 0 -> 1 once unlocking: the logo settles from the typing effect to the
+  // plain logo and fixed glow the splash's first frame draws. Finishes well
+  // inside the service's 360 ms release gate.
+  property real handoff: unlocking ? 1 : 0
+  Behavior on handoff { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
 
   // Lock-entry CRT power-down. The service points snapshotSource at a file
   // URL of a desktop screenshot taken just before locking, then bumps
@@ -484,6 +491,15 @@ Item {
       transform: Translate { x: root.driftX; y: root.driftY }
     }
 
+    // Unlock handoff: tint the blurred wallpaper to the splash stage's look.
+    Rectangle {
+      anchors.fill: parent
+      color: Commons.Color.background
+      opacity: root.unlocking ? root.unlockStageDim : 0
+      visible: opacity > 0
+      Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.InOutCubic } }
+    }
+
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
@@ -491,8 +507,9 @@ Item {
       onPositionChanged: root.wakeRequested()
     }
 
-    // Foreground: clock, wordmark and field. Fades out for the unlock
-    // handoff; the inner item is driven by the power-down reveal.
+    // Foreground: clock and field (the logo is in logoLayer below). Fades
+    // out for the unlock handoff; the inner item is driven by the power-down
+    // reveal.
     Item {
       id: unlockFade
       anchors.fill: parent
@@ -546,219 +563,6 @@ Item {
             // Letter spacing trails the last glyph; pad the left by the same
             // amount so the line stays optically centered.
             leftPadding: root.dateFontSize * 0.35
-          }
-        }
-
-        // Small off-screen copy used only to measure the logo's aspect ratio
-        // (the visible image's size depends on it, so it cannot measure itself).
-        Image {
-          id: logoProbe
-          visible: false
-          source: wordmark.source
-          sourceSize.width: 400
-        }
-
-        // The user's logo above the password field, tinted with the theme's lock
-        // text color (unless tintLogo is false) so it follows every theme switch.
-        // Purely decorative.
-        Image {
-          id: wordmark
-          // Hero-sized: fit inside 72% of the screen width and 30% of its height,
-          // keeping the logo's own aspect ratio (wide wordmarks reach the width
-          // limit, square symbols the height limit). Centered at 44% height,
-          // just above the optical middle.
-          readonly property real boxWidth: parent.width * 0.72
-          readonly property real boxHeight: parent.height * 0.30
-          readonly property real aspect: logoProbe.implicitHeight > 0 ? logoProbe.implicitWidth / logoProbe.implicitHeight : 4
-          width: Math.min(boxWidth, boxHeight * aspect)
-          height: width / aspect
-          anchors.horizontalCenter: parent.horizontalCenter
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.verticalCenterOffset: -parent.height * 0.06
-          source: root.logoPath ? "file://" + root.logoPath.split("/").map(encodeURIComponent).join("/") : ""
-          fillMode: Image.PreserveAspectFit
-          sourceSize.width: Math.round(width * 1.5)
-          visible: false
-          layer.enabled: true
-        }
-
-        // What every logo effect below draws from. Tinting recolors by
-        // brightness, so when tinted the logo is first flattened to a white
-        // silhouette: black, white and coloured logos all take the theme colour.
-        // Untinted logos pass through unchanged.
-        Item {
-          id: logoSource
-          x: wordmark.x
-          y: wordmark.y
-          width: wordmark.width
-          height: wordmark.height
-          visible: false
-          layer.enabled: true
-
-          MultiEffect {
-            anchors.fill: parent
-            source: wordmark
-            brightness: root.tintLogo ? 1 : 0
-          }
-        }
-
-        // Breathing accent glow behind the wordmark. The blur of the static
-        // source is cached; only this item's opacity animates.
-        // The wordmark texture has almost no transparent margin, and a
-        // MultiEffect with auto-padding stretches a layered source over its
-        // padded rect (which used to inflate the letters ~7% wide and ~29%
-        // tall). Render it once into an explicitly padded texture instead, so
-        // the glow and shadow have room and the letters keep their true size.
-        ShaderEffectSource {
-          id: wordmarkSource
-          readonly property real pad: Math.round(wordmark.height * 0.3)
-          x: wordmark.x - pad
-          y: wordmark.y - pad
-          width: wordmark.width + pad * 2
-          height: wordmark.height + pad * 2
-          sourceItem: logoSource
-          sourceRect: Qt.rect(-pad, -pad, width, height)
-          visible: false
-        }
-
-        // Breathing accent glow behind the wordmark. The blur of the static
-        // source is cached; only this item's opacity animates.
-        MultiEffect {
-          anchors.fill: wordmarkSource
-          source: wordmarkSource
-          autoPaddingEnabled: false
-          visible: wordmark.status === Image.Ready
-          // Glow grows with the typing effect's charge (and its keystroke kick).
-          opacity: (0.15 + 0.20 * (root.reducedMotion ? 0.5 : root.breath)) * (0.3 + 0.7 * root.fxGlow) + root.fxKick
-          colorization: 1
-          colorizationColor: Commons.Color.accent
-          blurEnabled: true
-          blur: 1.0
-          blurMax: 32
-          blurMultiplier: 0.6
-        }
-
-        // Glitch RGB-split ghosts (only rendered during a failed attempt).
-        MultiEffect {
-          anchors.fill: wordmark
-          source: logoSource
-          visible: root.glitching && wordmark.status === Image.Ready
-          opacity: 0.6
-          colorization: 1
-          colorizationColor: root.glitchRed
-          transform: Translate { x: root.ghostAX }
-        }
-
-        MultiEffect {
-          anchors.fill: wordmark
-          source: logoSource
-          visible: root.glitching && wordmark.status === Image.Ready
-          opacity: 0.45
-          colorization: 1
-          colorizationColor: Commons.Color.accent
-          transform: Translate { x: root.ghostBX }
-        }
-
-        // The logo itself, at the typing effect's base opacity (cells: the dim,
-        // "uncharged" copy the lit cells draw over). The red glitch lifts it.
-        MultiEffect {
-          anchors.fill: wordmarkSource
-          source: wordmarkSource
-          autoPaddingEnabled: false
-          visible: wordmark.status === Image.Ready
-          opacity: root.fxBase + (1 - root.fxBase) * 0.6 * root.glitchMix
-          Behavior on opacity { enabled: !root.glitching && root.glitchMix === 0; NumberAnimation { duration: 400; easing.type: Easing.OutCubic } }
-          // Untinted logos keep their own colours, but still flash red on a glitch.
-          colorization: root.tintLogo ? 1 : root.glitchMix
-          colorizationColor: root.mixColor(Commons.Color.lock.text, root.glitchRed, root.glitchMix)
-          shadowEnabled: true
-          shadowColor: Commons.Color.background
-          shadowOpacity: 0.55
-          shadowBlur: 0.8
-          shadowVerticalOffset: 2
-          shadowHorizontalOffset: 0
-        }
-
-        // Full-brightness, tinted logo in the padded box, handed to the
-        // typing effect as its source (no shadow: effects add their own).
-        Item {
-          id: fxSource
-          x: wordmarkSource.x
-          y: wordmarkSource.y
-          width: wordmarkSource.width
-          height: wordmarkSource.height
-          visible: false
-          layer.enabled: true
-
-          MultiEffect {
-            anchors.fill: parent
-            source: wordmarkSource
-            autoPaddingEnabled: false
-            colorization: root.tintLogo ? 1 : 0
-            colorizationColor: Commons.Color.lock.text
-          }
-        }
-
-        // The typing effect, over the plain logo and in the same box.
-        Loader {
-          id: fxLoader
-          x: wordmarkSource.x
-          y: wordmarkSource.y
-          width: wordmarkSource.width
-          height: wordmarkSource.height
-          visible: wordmark.status === Image.Ready
-          source: Qt.resolvedUrl("typing/" + root.fxName + ".qml")
-          onStatusChanged: {
-            if (status !== Loader.Error) return
-            console.warn("hello-lock: typing effect \"" + root.fxName + "\" failed to load, using off")
-            root.fxBroken = root.fxName
-          }
-          onLoaded: {
-            var e = item
-            try {
-              e.source = fxSource
-              e.inkRect = Qt.binding(function() {
-                return wordmark.status === Image.Ready
-                  ? Qt.rect(wordmarkSource.pad, wordmarkSource.pad, wordmark.width, wordmark.height)
-                  : Qt.rect(0, 0, 0, 0)
-              })
-              e.level = Qt.binding(function() { return root.fxHolding ? 1 : Math.min(root.typedLength, root.fxFullAt) / root.fxFullAt })
-              e.typedLength = Qt.binding(function() { return root.typedLength })
-              e.holding = Qt.binding(function() { return root.fxHolding })
-              e.reducedMotion = Qt.binding(function() { return root.reducedMotion })
-              e.accent = Qt.binding(function() { return Commons.Color.accent })
-              e.logoColor = Qt.binding(function() { return Commons.Color.lock.text })
-              e.errorColor = Qt.binding(function() { return Commons.Color.lock.textError })
-              // Optional extra: the drop shadow colour of the host's logo.
-              if (e.backgroundColor !== undefined) e.backgroundColor = Qt.binding(function() { return Commons.Color.background })
-            } catch (err) {
-              console.warn("hello-lock typing/" + root.fxName + ": setup failed: " + err)
-            }
-            root.fxCall("reset")
-          }
-        }
-
-        // Glitch slices: horizontal bands of the wordmark, displaced sideways.
-        Repeater {
-          model: 3
-          Item {
-            required property int index
-            readonly property var slice: root.glitchSlices[index]
-            visible: root.glitching && slice.on && wordmark.status === Image.Ready
-            x: wordmark.x + slice.dx
-            y: wordmark.y + slice.y
-            width: wordmark.width
-            height: slice.h
-            clip: true
-
-            MultiEffect {
-              y: -parent.slice.y
-              width: wordmark.width
-              height: wordmark.height
-              source: logoSource
-              colorization: 1
-              colorizationColor: root.glitchRed
-            }
           }
         }
 
@@ -962,15 +766,232 @@ Item {
         }
       }
     }
-  }
 
-  // Unlock handoff: tint the blurred wallpaper to the splash stage's look.
-  Rectangle {
-    anchors.fill: parent
-    color: Commons.Color.background
-    opacity: root.unlocking ? root.unlockStageDim : 0
-    visible: opacity > 0
-    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.InOutCubic } }
+    // The logo, outside unlockFade: it stays put through the unlock handoff
+    // (settling from the typing effect to the plain logo) so the frame the
+    // lock releases on matches the unlock splash's first frame, which draws
+    // the same logo in the same place and takes it from there.
+    Item {
+      id: logoLayer
+      anchors.fill: parent
+      opacity: root.revealOpacity
+      scale: root.revealScale
+
+      // Small off-screen copy used only to measure the logo's aspect ratio
+      // (the visible image's size depends on it, so it cannot measure itself).
+      Image {
+        id: logoProbe
+        visible: false
+        source: wordmark.source
+        sourceSize.width: 400
+      }
+
+      // The user's logo above the password field, tinted with the theme's lock
+      // text color (unless tintLogo is false) so it follows every theme switch.
+      // Purely decorative.
+      Image {
+        id: wordmark
+        // Hero-sized: fit inside 72% of the screen width and 30% of its height,
+        // keeping the logo's own aspect ratio (wide wordmarks reach the width
+        // limit, square symbols the height limit). Centered at 44% height,
+        // just above the optical middle.
+        readonly property real boxWidth: parent.width * 0.72
+        readonly property real boxHeight: parent.height * 0.30
+        readonly property real aspect: logoProbe.implicitHeight > 0 ? logoProbe.implicitWidth / logoProbe.implicitHeight : 4
+        width: Math.min(boxWidth, boxHeight * aspect)
+        height: width / aspect
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.verticalCenterOffset: -parent.height * 0.06
+        source: root.logoPath ? "file://" + root.logoPath.split("/").map(encodeURIComponent).join("/") : ""
+        fillMode: Image.PreserveAspectFit
+        sourceSize.width: Math.round(width * 1.5)
+        visible: false
+        layer.enabled: true
+      }
+
+      // What every logo effect below draws from. Tinting recolors by
+      // brightness, so when tinted the logo is first flattened to a white
+      // silhouette: black, white and coloured logos all take the theme colour.
+      // Untinted logos pass through unchanged.
+      Item {
+        id: logoSource
+        x: wordmark.x
+        y: wordmark.y
+        width: wordmark.width
+        height: wordmark.height
+        visible: false
+        layer.enabled: true
+
+        MultiEffect {
+          anchors.fill: parent
+          source: wordmark
+          brightness: root.tintLogo ? 1 : 0
+        }
+      }
+
+      // Breathing accent glow behind the wordmark. The blur of the static
+      // source is cached; only this item's opacity animates.
+      // The wordmark texture has almost no transparent margin, and a
+      // MultiEffect with auto-padding stretches a layered source over its
+      // padded rect (which used to inflate the letters ~7% wide and ~29%
+      // tall). Render it once into an explicitly padded texture instead, so
+      // the glow and shadow have room and the letters keep their true size.
+      ShaderEffectSource {
+        id: wordmarkSource
+        readonly property real pad: Math.round(wordmark.height * 0.3)
+        x: wordmark.x - pad
+        y: wordmark.y - pad
+        width: wordmark.width + pad * 2
+        height: wordmark.height + pad * 2
+        sourceItem: logoSource
+        sourceRect: Qt.rect(-pad, -pad, width, height)
+        visible: false
+      }
+
+      // Breathing accent glow behind the wordmark. The blur of the static
+      // source is cached; only this item's opacity animates.
+      MultiEffect {
+        anchors.fill: wordmarkSource
+        source: wordmarkSource
+        autoPaddingEnabled: false
+        visible: wordmark.status === Image.Ready
+        // Glow grows with the typing effect's charge (and its keystroke kick).
+        opacity: ((0.15 + 0.20 * (root.reducedMotion ? 0.5 : root.breath)) * (0.3 + 0.7 * root.fxGlow) + root.fxKick) * (1 - root.handoff)
+          + root.unlockLogoGlow * root.handoff
+        colorization: 1
+        colorizationColor: Commons.Color.accent
+        blurEnabled: true
+        blur: 1.0
+        blurMax: 32
+        blurMultiplier: 0.6
+      }
+
+      // Glitch RGB-split ghosts (only rendered during a failed attempt).
+      MultiEffect {
+        anchors.fill: wordmark
+        source: logoSource
+        visible: root.glitching && wordmark.status === Image.Ready
+        opacity: 0.6
+        colorization: 1
+        colorizationColor: root.glitchRed
+        transform: Translate { x: root.ghostAX }
+      }
+
+      MultiEffect {
+        anchors.fill: wordmark
+        source: logoSource
+        visible: root.glitching && wordmark.status === Image.Ready
+        opacity: 0.45
+        colorization: 1
+        colorizationColor: Commons.Color.accent
+        transform: Translate { x: root.ghostBX }
+      }
+
+      // The logo itself, at the typing effect's base opacity (cells: the dim,
+      // "uncharged" copy the lit cells draw over). The red glitch lifts it.
+      MultiEffect {
+        anchors.fill: wordmarkSource
+        source: wordmarkSource
+        autoPaddingEnabled: false
+        visible: wordmark.status === Image.Ready
+        opacity: root.handoff + (1 - root.handoff) * (root.fxBase + (1 - root.fxBase) * 0.6 * root.glitchMix)
+        Behavior on opacity { enabled: !root.glitching && root.glitchMix === 0 && !root.unlocking; NumberAnimation { duration: 400; easing.type: Easing.OutCubic } }
+        // Untinted logos keep their own colours, but still flash red on a glitch.
+        colorization: root.tintLogo ? 1 : root.glitchMix
+        colorizationColor: root.mixColor(Commons.Color.lock.text, root.glitchRed, root.glitchMix)
+        shadowEnabled: true
+        shadowColor: Commons.Color.background
+        shadowOpacity: 0.55
+        shadowBlur: 0.8
+        shadowVerticalOffset: 2
+        shadowHorizontalOffset: 0
+      }
+
+      // Full-brightness, tinted logo in the padded box, handed to the
+      // typing effect as its source (no shadow: effects add their own).
+      Item {
+        id: fxSource
+        x: wordmarkSource.x
+        y: wordmarkSource.y
+        width: wordmarkSource.width
+        height: wordmarkSource.height
+        visible: false
+        layer.enabled: true
+
+        MultiEffect {
+          anchors.fill: parent
+          source: wordmarkSource
+          autoPaddingEnabled: false
+          colorization: root.tintLogo ? 1 : 0
+          colorizationColor: Commons.Color.lock.text
+        }
+      }
+
+      // The typing effect, over the plain logo and in the same box.
+      Loader {
+        id: fxLoader
+        opacity: 1 - root.handoff
+        x: wordmarkSource.x
+        y: wordmarkSource.y
+        width: wordmarkSource.width
+        height: wordmarkSource.height
+        visible: wordmark.status === Image.Ready
+        source: Qt.resolvedUrl("typing/" + root.fxName + ".qml")
+        onStatusChanged: {
+          if (status !== Loader.Error) return
+          console.warn("hello-lock: typing effect \"" + root.fxName + "\" failed to load, using off")
+          root.fxBroken = root.fxName
+        }
+        onLoaded: {
+          var e = item
+          try {
+            e.source = fxSource
+            e.inkRect = Qt.binding(function() {
+              return wordmark.status === Image.Ready
+                ? Qt.rect(wordmarkSource.pad, wordmarkSource.pad, wordmark.width, wordmark.height)
+                : Qt.rect(0, 0, 0, 0)
+            })
+            e.level = Qt.binding(function() { return root.fxHolding ? 1 : Math.min(root.typedLength, root.fxFullAt) / root.fxFullAt })
+            e.typedLength = Qt.binding(function() { return root.typedLength })
+            e.holding = Qt.binding(function() { return root.fxHolding })
+            e.reducedMotion = Qt.binding(function() { return root.reducedMotion })
+            e.accent = Qt.binding(function() { return Commons.Color.accent })
+            e.logoColor = Qt.binding(function() { return Commons.Color.lock.text })
+            e.errorColor = Qt.binding(function() { return Commons.Color.lock.textError })
+            // Optional extra: the drop shadow colour of the host's logo.
+            if (e.backgroundColor !== undefined) e.backgroundColor = Qt.binding(function() { return Commons.Color.background })
+          } catch (err) {
+            console.warn("hello-lock typing/" + root.fxName + ": setup failed: " + err)
+          }
+          root.fxCall("reset")
+        }
+      }
+
+      // Glitch slices: horizontal bands of the wordmark, displaced sideways.
+      Repeater {
+        model: 3
+        Item {
+          required property int index
+          readonly property var slice: root.glitchSlices[index]
+          visible: root.glitching && slice.on && wordmark.status === Image.Ready
+          x: wordmark.x + slice.dx
+          y: wordmark.y + slice.y
+          width: wordmark.width
+          height: slice.h
+          clip: true
+
+          MultiEffect {
+            y: -parent.slice.y
+            width: wordmark.width
+            height: wordmark.height
+            source: logoSource
+            colorization: 1
+            colorizationColor: root.glitchRed
+          }
+        }
+      }
+    }
   }
 
   // CRT power-down played over the desktop snapshot on lock entry. Loaded

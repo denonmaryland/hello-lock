@@ -54,7 +54,7 @@ Item {
   readonly property var configDefaults: ({
     name: "", brand: "", logo: "", symbol: "", symbolParts: [], tintLogo: true,
     birthday: "", sounds: true, weather: true, powerDown: true, legendary: true, clock: true,
-    motion: "auto", typingEffect: "cells", brandingPresets: [], presetMode: "manual", selectedPreset: ""
+    motion: "auto", typingEffect: "cells", handoff: "shuffle", brandingPresets: [], presetMode: "manual", selectedPreset: ""
   })
   property var userConfig: ({})
   property string accountName: ""
@@ -104,14 +104,57 @@ Item {
   readonly property var symbolPaths: {
     var parts = Array.isArray(config.symbolParts) ? config.symbolParts.map(expandPath).filter(function(x) { return x }) : []
     if (parts.length > 0) return parts.slice(0, 2)
-    return [expandPath(config.symbol) || logoPath]
+    return [expandPath(effectiveSymbol) || logoPath]
+  }
+
+  // "symbol": "@shuffle" draws a different built-in symbol each lock (every
+  // one before any repeats), kept through that unlock. Previews and repeated
+  // lock requests never advance it.
+  readonly property bool symbolShuffle: !(Array.isArray(config.symbolParts) && config.symbolParts.length > 0)
+    && cleanConfigText(config.symbol) === "@shuffle"
+  property var builtinSymbolNames: []
+  property var symbolBag: []
+  property string lockSymbol: ""
+  readonly property string effectiveSymbol: symbolShuffle ? (lockSymbol ? "@" + lockSymbol : "") : cleanConfigText(config.symbol)
+
+  function drawSymbol() {
+    var pool = builtinSymbolNames
+    if (pool.length === 0) return ""
+    var bag = symbolBag.filter(function(n) { return pool.indexOf(n) >= 0 })
+    if (bag.length === 0) {
+      bag = pool.slice()
+      for (var i = bag.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1))
+        var t = bag[i]; bag[i] = bag[j]; bag[j] = t
+      }
+      // No back-to-back repeat across a refill.
+      if (bag.length > 1 && bag[0] === lockSymbol) { var f = bag[0]; bag[0] = bag[bag.length - 1]; bag[bag.length - 1] = f }
+    }
+    var next = bag.shift()
+    symbolBag = bag
+    return next
+  }
+
+  Process {
+    id: symbolListProc
+    running: true
+    command: ["bash", "-c", "cd \"$1\"/symbols 2>/dev/null && ls -1 -- *.svg", "symbol-list", root.pluginDir]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.builtinSymbolNames = String(text || "").split("\n").map(function(l) { return l.trim().replace(/\.svg$/, "") })
+          .filter(function(n) { return /^[a-z0-9-]+$/.test(n) })
+        // Something to show before the first lock (previews).
+        if (!root.lockSymbol) root.lockSymbol = root.drawSymbol()
+      }
+    }
   }
 
   // Built-in symbol name ("@radar" -> "radar") when the unlock symbol is one of
   // symbols/, else "". Pixel animations use symbols/grids.json for these.
   readonly property string symbolName: {
     var parts = Array.isArray(config.symbolParts) ? config.symbolParts : []
-    var v = parts.length === 0 ? cleanConfigText(config.symbol) : ""
+    var v = parts.length === 0 ? effectiveSymbol : ""
     return /^@[a-z0-9-]+$/.test(v) ? v.slice(1) : ""
   }
 
@@ -404,6 +447,8 @@ Item {
       lockStartedAt = Date.now()
       root.refreshMotion()
       if (typingEffect === "shuffle") lockTypingEffect = drawShuffle()
+      // Drawn every lock (cheap); used only when the branding says @shuffle.
+      lockSymbol = drawSymbol() || lockSymbol
       if (!typingListProc.running) typingListProc.running = true
       clearSnapshots()
       try {
@@ -779,6 +824,8 @@ Item {
   Binding { target: unlockSplashLoader.item; property: "brand"; value: root.cleanConfigText(root.config.brand); when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "symbolPaths"; value: root.symbolPaths; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "tintSymbol"; value: root.config.tintLogo !== false; when: unlockSplashLoader.status === Loader.Ready }
+  Binding { target: unlockSplashLoader.item; property: "logoPath"; value: root.logoPath; when: unlockSplashLoader.status === Loader.Ready }
+  Binding { target: unlockSplashLoader.item; property: "handoff"; value: String(root.config.handoff || "shuffle"); when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "legendaryEnabled"; value: root.config.legendary !== false; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "symbolName"; value: root.symbolName; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "pluginDir"; value: root.pluginDir; when: unlockSplashLoader.status === Loader.Ready }
@@ -1085,12 +1132,13 @@ Item {
     ignoreUnknownSignals: true
     function onClosed() { root.settingsOpen = false }
     function onSetupRequested() { root.settingsOpen = false; root.openOnboarding() }
-    function onUnlockPreviewRequested(symbol) {
+    function onUnlockPreviewRequested(symbol, handoff) {
       if (root.currentlyLocked() || !unlockSplashLoader.item) return
       root.settingsAway = true
       settingsReturn.armed = false
       // Let the config.json write land first, as after setup.
       settingsUnlockTimer.symbol = symbol
+      settingsUnlockTimer.handoff = handoff || ""
       settingsUnlockTimer.restart()
     }
     function onLockPreviewRequested(effect) {
@@ -1110,11 +1158,12 @@ Item {
     id: settingsUnlockTimer
     interval: 450
     property string symbol: ""
+    property string handoff: ""
     onTriggered: {
       if (root.currentlyLocked() || !unlockSplashLoader.item) { root.settingsAway = false; return }
       root.refreshBackground()
       if (symbol && !unlockSplashLoader.item.knowsSymbol(symbol)) symbol = ""
-      root.playUnlockPreview(-1, { awaySeconds: 3600, status: root.helloStatus, symbol: symbol })
+      root.playUnlockPreview(-1, { awaySeconds: 3600, status: root.helloStatus, symbol: symbol, handoff: handoff })
       settingsReturn.armed = true
       settingsReturnFallback.restart()
     }
@@ -1326,6 +1375,15 @@ Item {
 
     // Preview-only motion override for one play. motion: "reduced" (calm
     // fade), "full", or "secondary" (the unfocused-monitor version).
+    // A named logo handoff transition (handoff/<name>.qml), with motion on.
+    function splashPreviewHandoff(name: string): string {
+      if (root.currentlyLocked()) return "locked"
+      if (!unlockSplashLoader.item) return "unavailable"
+      if (!unlockSplashLoader.item.knowsHandoff(String(name).toLowerCase())) return "unknown-handoff"
+      root.refreshBackground()
+      root.playUnlockPreview(-1, { awaySeconds: 3600, status: root.helloStatus, motion: "full", handoff: String(name) })
+      return "ok"
+    }
     function splashPreviewMotion(index: int, motion: string): string {
       if (root.currentlyLocked()) return "locked"
       if (!unlockSplashLoader.item) return "unavailable"

@@ -122,6 +122,13 @@ class Helpers(unittest.TestCase):
         self.assertEqual(next(self.cfg.parent.glob("config.json.bak.*")).read_text(), before)
         self.assertEqual(self.cfg.stat().st_mode & 0o777, 0o600)
 
+    def test_handoff_setting_is_saved(self):
+        self.cfg.write_text('{"name":"A"}\n')
+        self.assertEqual(self.run_helper("hello-config", "save", '{"handoff":"glitch"}').returncode, 0)
+        self.assertEqual(json.loads(self.cfg.read_text()), {"name": "A", "handoff": "glitch"})
+        self.assertEqual(self.run_helper("hello-config", "save", '{"handoff":null}').returncode, 0)
+        self.assertEqual(json.loads(self.cfg.read_text()), {"name": "A"})
+
     def test_settings_saves_without_backup_and_prunes_old_backups(self):
         self.cfg.write_text('{"name":"A"}\n')
         for i in range(13):

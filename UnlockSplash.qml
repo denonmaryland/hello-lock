@@ -6,6 +6,9 @@ import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons as Commons
+// Logo handoff transitions, loaded by name; imported so the shell knows the
+// folder and its shared types (HandoffEffect, Piece).
+import "handoff" as Handoff
 
 // Hello Lock power-on splash shown after a successful unlock. Purely visual: the
 // lock service unlocks on its own; this only covers the desktop for ~3.5s.
@@ -62,6 +65,21 @@ Item {
   // One image (the whole symbol) or two (outer + inner part, animated separately).
   property var symbolPaths: []
   property bool tintSymbol: true
+  // The lock screen's logo. Each play opens on an exact copy of it (same
+  // place, tint and glow as LockView once its handoff settles), so release
+  // shows no cut; it then falls back while the symbol comes up behind it.
+  // Tinting follows tintSymbol: both come from the same tintLogo setting.
+  property string logoPath: ""
+  // Must match LockView's unlockLogoGlow.
+  readonly property real markGlow: 0.3
+  // How the logo hands over to the symbol: handoff/<name>.qml (contract in
+  // handoff/README.md). handoff is the setting, a name or "shuffle";
+  // activeHandoff is the one this play uses, chosen when the stage is primed
+  // so its file is loaded before the lock releases.
+  property string handoff: "shuffle"
+  readonly property var handoffNames: ["fallback", "liftoff", "slide", "flip", "dissolve", "split", "blinds",
+    "scatter", "wipe", "glitch", "poweroff", "flythrough", "fold", "drop", "pixelate"]
+  property string activeHandoff: ""
   property bool legendaryEnabled: true
   // Built-in symbol name ("radar") or "" for image symbols; grids in
   // pluginDir/symbols/grids.json. reducedMotion: see Service.qml.
@@ -283,6 +301,21 @@ Item {
     return "evening"
   }
 
+  function knowsHandoff(name) { return handoffNames.indexOf(name) >= 0 }
+
+  // Real unlocks draw from a bag (every transition once per round, no
+  // back-to-back repeats); previews pick at random and never advance it.
+  property var handoffBag: []
+  property int lastHandoff: -1
+  function chooseHandoff(real) {
+    var setting = String(handoff || "").toLowerCase()
+    if (knowsHandoff(setting)) return setting
+    if (!real) return handoffNames[Math.floor(Math.random() * handoffNames.length)]
+    if (handoffBag.length === 0) handoffBag = shuffled(handoffNames.length, lastHandoff)
+    lastHandoff = handoffBag.shift()
+    return handoffNames[lastHandoff]
+  }
+
   function pickVariant() {
     if (variantBag.length === 0) variantBag = shuffled(variantCount, lastVariant)
     lastVariant = variantBag.shift()
@@ -350,7 +383,9 @@ Item {
     titleCard = !!g.title
   }
 
-  function prime() {
+  // preview: true when play() primes its own stage (no lock underneath).
+  function prime(preview) {
+    activeHandoff = chooseHandoff(preview !== true)
     primeToken += 1
     shown = true
     safetyTimer.restart()
@@ -366,7 +401,10 @@ Item {
     focusedScreen = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
     // A primed stage is already up under the lock; only an unprimed one fades in.
     stageFadeIn = calm && !shown
-    if (!shown) prime()
+    if (!shown) prime(true)
+    // Previews can ask for a particular transition.
+    var askedHandoff = typeof ctx.handoff === "string" ? ctx.handoff.toLowerCase() : ""
+    if (knowsHandoff(askedHandoff)) activeHandoff = askedHandoff
     var forced = finiteNumber(forcedVariant)
     var away = finiteNumber(ctx.awaySeconds)
     shortMode = !calm && (ctx.forceShort === true || (away !== null && away < shortAwayLimit))
@@ -389,6 +427,7 @@ Item {
     soundRequested(lastSound)
     console.log("hello-lock splash: " + (shortMode ? "short" : variantNames[variant])
       + (calm && !shortMode ? " (reduced motion)" : "") + (symbolOverride ? " symbol=" + symbolOverride : "")
+      + (logoPath ? " handoff=" + activeHandoff : "")
       + " focused=" + (focusedScreen || "?") + (forceSecondary ? " (secondary preview)" : "")
       + " away=" + (away === null ? "?" : Math.round(away) + "s")
       + (shortMode ? "" : " greeting=\"" + statusLine + " / " + greetingLine + "\""))
@@ -478,6 +517,15 @@ Item {
       property real symbolScale: 1
       property real symbolOpacity: 1
       property real symbolRise: 0
+      // Logo handoff: the lock screen's logo (mark) and the symbol's emerge
+      // scale, layered on top of whatever the variant does to the symbol.
+      property real markOpacity: 0
+      property real markScale: 1
+      property real markDrop: 0
+      property real emergeScale: 1
+      // A transition file is drawing the logo (the plain copy is hidden).
+      property bool handoffActive: false
+      readonly property var fx: handoffActive && handoffLoader.status === Loader.Ready ? handoffLoader.item : null
       property real glowOpacity: 0
       property real flash: 0
       property real ringScale: 0.9
@@ -539,6 +587,11 @@ Item {
         calmAnim.stop()
         pixWait.stop()
         skipOut.stop()
+        markRecede.stop()
+        markFade.stop()
+        if (handoffLoader.item) {
+          try { handoffLoader.item.stop() } catch (e) { console.warn("hello-lock splash: handoff stop failed: " + e) }
+        }
       }
 
       function reset() {
@@ -548,6 +601,11 @@ Item {
         innerOpacity = 0; innerY = 0
         spinAngle = 0; flipAngle = 0
         symbolScale = 1; symbolOpacity = 1; symbolRise = 0
+        markOpacity = 0; markScale = 1; markDrop = 0; emergeScale = 1
+        handoffActive = false
+        if (handoffLoader.item) {
+          try { handoffLoader.item.reset() } catch (e) { console.warn("hello-lock splash: handoff reset failed: " + e) }
+        }
         glowOpacity = 0; flash = 0
         ringScale = 0.9; ringOpacity = 0
         sheenX = -1.1
@@ -584,10 +642,39 @@ Item {
         }
       }
 
+      // Opens on the lock screen's logo, then hands over: with motion on the
+      // focused screen the chosen transition takes it away while the symbol
+      // comes in; reduced motion and other screens get a plain crossfade. A
+      // calm preview that fades the whole stage in has no lock screen to
+      // match, so no logo.
+      function beginHandoff() {
+        if (!root.logoPath || root.stageFadeIn) return
+        markOpacity = 1
+        if (root.calm || !primary) {
+          markFade.restart()
+          return
+        }
+        var effect = handoffLoader.status === Loader.Ready ? handoffLoader.item : null
+        if (effect) {
+          try {
+            handoffActive = true
+            effect.play()
+            return
+          } catch (e) {
+            console.warn("hello-lock splash: handoff \"" + root.activeHandoff + "\" failed: " + e)
+            handoffActive = false
+          }
+        }
+        // No usable transition file: the built-in fall back.
+        emergeScale = 0.84
+        markRecede.restart()
+      }
+
       function start() {
         reset()
         primary = root.isPrimaryScreen(win.modelData)
         exitScale = root.calm ? 1 : 1.05
+        beginHandoff()
         if (root.shortMode) {
           symbolScale = 0.9
           shortAnim.restart()
@@ -651,7 +738,10 @@ Item {
       Connections {
         target: root
         function onShownChanged() { if (!root.shown) win.stopAll() }
-        function onPrimeTokenChanged() { win.reset(); win.outerOpacity = 0; win.innerOpacity = 0 }
+        function onPrimeTokenChanged() {
+          win.reset(); win.outerOpacity = 0; win.innerOpacity = 0
+          if (root.logoPath) win.markOpacity = 1
+        }
         function onPlayTokenChanged() { win.start() }
         function onSkipTokenChanged() {
           if (!root.playing) return
@@ -786,6 +876,25 @@ Item {
           y: win.symbolCenterY - sz / 2 + win.symbolRise * sz
           scale: win.symbolScale
           opacity: win.symbolOpacity
+          // The symbol's entrance for the logo handoff (identity otherwise).
+          transform: [
+            Scale {
+              origin.x: stageSymbol.width / 2
+              origin.y: stageSymbol.height / 2
+              xScale: win.emergeScale * (win.fx ? win.fx.emergeScale : 1)
+              yScale: win.emergeScale * (win.fx ? win.fx.emergeScale : 1)
+            },
+            Rotation {
+              origin.x: stageSymbol.width / 2
+              origin.y: stageSymbol.height / 2
+              axis { x: 0; y: 1; z: 0 }
+              angle: win.fx ? win.fx.emergeTurn : 0
+            },
+            Translate {
+              x: win.fx ? win.fx.emergeX * stageSymbol.sz : 0
+              y: win.fx ? win.fx.emergeY * stageSymbol.sz : 0
+            }
+          ]
 
           // Thin accent ring that pulses outward.
           Rectangle {
@@ -1271,6 +1380,139 @@ Item {
           }
         }
 
+        // The lock screen's logo, rebuilt exactly as LockView draws it once its
+        // unlock handoff settles (same box, anchors, tint, shadow and glow), so
+        // the frame the lock releases on continues here unchanged. Above the
+        // symbol, which comes up from behind it.
+        Image {
+          id: markProbe
+          visible: false
+          source: markImage.source
+          sourceSize.width: 400
+        }
+
+        Item {
+          id: mark
+          readonly property real boxWidth: parent.width * 0.72
+          readonly property real boxHeight: parent.height * 0.30
+          readonly property real aspect: markProbe.implicitHeight > 0 ? markProbe.implicitWidth / markProbe.implicitHeight : 4
+          width: Math.min(boxWidth, boxHeight * aspect)
+          height: width / aspect
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.verticalCenterOffset: -parent.height * 0.06
+          visible: win.markOpacity > 0 && markImage.status === Image.Ready
+          opacity: win.markOpacity
+          scale: win.markScale
+          transform: Translate { y: win.markDrop * win.height }
+
+          Image {
+            id: markImage
+            anchors.fill: parent
+            source: root.pathUrl(root.logoPath)
+            fillMode: Image.PreserveAspectFit
+            sourceSize.width: Math.round(width * 1.5)
+            visible: false
+            layer.enabled: true
+          }
+
+          Item {
+            id: markFlat
+            anchors.fill: parent
+            visible: false
+            layer.enabled: true
+
+            MultiEffect {
+              anchors.fill: parent
+              source: markImage
+              brightness: root.tintSymbol ? 1 : 0
+            }
+          }
+
+          ShaderEffectSource {
+            id: markSource
+            readonly property real pad: Math.round(mark.height * 0.3)
+            x: -pad
+            y: -pad
+            width: mark.width + pad * 2
+            height: mark.height + pad * 2
+            sourceItem: markFlat
+            sourceRect: Qt.rect(-pad, -pad, width, height)
+            visible: false
+          }
+
+          // Glow and logo, grouped so a transition can draw them as one
+          // texture (markTexture) while this copy is hidden.
+          Item {
+            id: markComposite
+            x: markSource.x
+            y: markSource.y
+            width: markSource.width
+            height: markSource.height
+
+            MultiEffect {
+              anchors.fill: parent
+              source: markSource
+              autoPaddingEnabled: false
+              opacity: root.markGlow
+              colorization: 1
+              colorizationColor: Commons.Color.accent
+              blurEnabled: true
+              blur: 1.0
+              blurMax: 32
+              blurMultiplier: 0.6
+            }
+
+            MultiEffect {
+              anchors.fill: parent
+              source: markSource
+              autoPaddingEnabled: false
+              colorization: root.tintSymbol ? 1 : 0
+              colorizationColor: Commons.Color.lock.text
+              shadowEnabled: true
+              shadowColor: Commons.Color.background
+              shadowOpacity: 0.55
+              shadowBlur: 0.8
+              shadowVerticalOffset: 2
+              shadowHorizontalOffset: 0
+            }
+          }
+        }
+
+        ShaderEffectSource {
+          id: markTexture
+          sourceItem: markComposite
+          hideSource: win.handoffActive
+          visible: false
+        }
+
+        // The chosen transition (handoff/<name>.qml), drawing from markTexture
+        // once it plays. Loaded when the stage is primed, before release.
+        Loader {
+          id: handoffLoader
+          anchors.fill: parent
+          source: root.knowsHandoff(root.activeHandoff) ? Qt.resolvedUrl("handoff/" + root.activeHandoff + ".qml") : ""
+          onStatusChanged: {
+            if (status === Loader.Error)
+              console.warn("hello-lock splash: handoff \"" + root.activeHandoff + "\" failed to load; falling back")
+          }
+          onLoaded: {
+            var e = item
+            try {
+              e.source = markTexture
+              e.sourceRect = Qt.binding(function() {
+                return Qt.rect(mark.x + markComposite.x, mark.y + markComposite.y, markComposite.width, markComposite.height)
+              })
+              e.accent = Qt.binding(function() { return Commons.Color.accent })
+              e.logoColor = Qt.binding(function() { return Commons.Color.lock.text })
+              e.alertColor = Qt.binding(function() { return Commons.Color.urgent })
+              e.backgroundColor = Qt.binding(function() { return Commons.Color.background })
+            } catch (err) {
+              console.warn("hello-lock splash: handoff \"" + root.activeHandoff + "\" setup failed: " + err)
+            }
+          }
+        }
+
         // Greeting: a typed status line in the accent color, then the
         // greeting tracking in beneath it.
         Item {
@@ -1360,6 +1602,26 @@ Item {
       }
 
       // --- Animations -------------------------------------------------------
+
+      // Logo handoff, run alongside every variant from its first frame: the
+      // logo shrinks back and sinks as it fades, while the symbol (behind it)
+      // grows into its own starting pose. Easing out, so it is already moving
+      // on the frame the lock releases.
+      ParallelAnimation {
+        id: markRecede
+        NumberAnimation { target: win; property: "markScale"; from: 1; to: 0.74; duration: 650; easing.type: Easing.OutCubic }
+        NumberAnimation { target: win; property: "markDrop"; from: 0; to: 0.03; duration: 650; easing.type: Easing.OutCubic }
+        NumberAnimation { target: win; property: "markOpacity"; from: 1; to: 0; duration: 520; easing.type: Easing.InOutQuad }
+        NumberAnimation { target: win; property: "emergeScale"; from: 0.84; to: 1; duration: 750; easing.type: Easing.OutCubic }
+      }
+
+      // Reduced motion and other screens: the logo just fades.
+      NumberAnimation {
+        id: markFade
+        target: win; property: "markOpacity"
+        from: 1; to: 0
+        duration: 360; easing.type: Easing.OutCubic
+      }
 
       // 0 · Coin: two upright turns, decelerating to rest facing forward.
       ParallelAnimation {

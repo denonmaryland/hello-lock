@@ -13,6 +13,7 @@ A lock screen for [Omarchy](https://omarchy.org) that greets you.
 - **A wrong password is handled calmly.** A short shake and `ACCESS DENIED · ATTEMPT 2` under the field. From the third try, one helpful hint: "Caps Lock is on", or which keyboard layout is active if you have several. A small `⇪ CAPS` badge shows whenever Caps Lock is on.
 - **Power-down on lock:** the screen collapses like an old CRT turning off. With several monitors it ripples across them.
 - **Power-on unlock:** one of eleven animations (coin, assemble, scan, glitch, heartbeat, orbit, monolith, particles, warp, split, pixels) with a typed status line and a greeting. They're shuffled, so you see all of them before any repeats. In *pixels*, your symbol's pixels rain in and lock into place; it works for any symbol, including your own image. With several monitors, the one you're using gets the full animation and the others a quieter fade.
+- **A handoff, not a cut:** at the unlock your logo stays where it was, then hands over to the symbol in one of fifteen [transitions](#transitions): it falls back, flips like a card, glitches out, folds in, collapses like an old TV, and more. They're shuffled too.
 - **Little touches:** a clock and date, battery and weather after unlocking, holiday and birthday greetings, a "you were away 2h 14m" line, low warm sounds, and a rare gold *legendary* unlock.
 - **Calm when you want it:** if you turn Hyprland's animations off, Hello Lock switches to gentle fades too (see `motion`).
 
@@ -67,7 +68,7 @@ omarchy-shell lock settings
 
 <p align="center"><img src="docs/settings.png" alt="The settings window: a sidebar of sections and the unlock symbol grid" width="720"></p>
 
-Every option is on one page, grouped in a sidebar: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol and the gold unlock), **Typing**, **Lock screen** (clock, power-down, motion), **Sound** (on/off, volume, quiet hours), **Presets** (saved looks and rotation) and **Weather**. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. **Play unlock** and **Preview** show the result without locking. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections.
+Every option is on one page, grouped in a sidebar: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol, the gold unlock and the transition), **Typing**, **Lock screen** (clock, power-down, motion), **Sound** (on/off, volume, quiet hours), **Presets** (saved looks and rotation) and **Weather**. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. **Play unlock** and **Preview** show the result without locking. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections.
 
 A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows as **Custom**. If you try a built-in symbol, you can switch back to Custom until you close the window.
 
@@ -150,7 +151,7 @@ Create `~/.config/hello-lock/config.json`. Every field is optional, and changes 
 | `name` | your account's full name, else your username | Used in the greetings. |
 | `brand` | `""` (shows `SYSTEM`) | Word for the first status line, e.g. `"ADA"` → `ADA ONLINE`. |
 | `logo` | the Omarchy logo | SVG or PNG on the lock screen. Any shape works. |
-| `symbol` | your `logo` | The image that animates on unlock: a path, or a built-in by name, like `"@omarchy"` or `"@bolt"` (every name is in `symbols/`). |
+| `symbol` | your `logo` | The image that animates on unlock: a path, a built-in by name, like `"@omarchy"` or `"@bolt"` (every name is in `symbols/`), or `"@shuffle"` for a different built-in every unlock (each one before any repeats; Settings → Unlock → **Shuffle**). |
 | `wordmarkText` | `""` | Set by setup when you type a wordmark; Save generates `wordmark-<hash>.svg` and updates `logo`. |
 | `wordmarkStyle` | `"blocks"` | The wordmark's style (see below). |
 | `symbolParts` | `[]` | Advanced: two images (outer, inner) on the same canvas, animated separately in the "assemble" animation. |
@@ -162,6 +163,7 @@ Create `~/.config/hello-lock/config.json`. Every field is optional, and changes 
 | `legendary` | `true` | The 2% gold unlock. |
 | `clock` | `true` | The clock and date on the lock screen. |
 | `typingEffect` | `"cells"` | What the logo does while you type: `"cells"`, `"scanline"`, `"liquid"`, `"decrypt"`, `"equalizer"`, `"sweep"`, `"pulse"`, `"off"`, or `"shuffle"` for a different one each lock (see [Typing effects](#typing-effects)). |
+| `handoff` | `"shuffle"` | How the logo hands over to the symbol at unlock: `"fallback"`, `"liftoff"`, `"slide"`, `"flip"`, `"dissolve"`, `"split"`, `"blinds"`, `"scatter"`, `"wipe"`, `"glitch"`, `"poweroff"`, `"flythrough"`, `"fold"`, `"drop"`, `"pixelate"`, or `"shuffle"` (see [Transitions](#transitions)). |
 | `motion` | `"auto"` | Calmer animations: fades instead of big motion, on the lock screen and the unlock. `"auto"` follows Hyprland's `animations:enabled`, `"full"` always animates, `"reduced"` always calms. |
 | `brandingPresets` | `[]` | Saved looks. Written by Settings → Presets; see [Brand presets](#brand-presets). |
 | `selectedPreset` | `""` | The id of the preset in use. |
@@ -224,6 +226,30 @@ The lock doesn't wait for capture. Files are removed after all monitors finish t
 
 Each effect is one QML file in `typing/` that follows a small contract, described in [`typing/README.md`](typing/README.md) along with a test bench (`typing/harness/run.sh <name>`). Liquid also ships its compiled shader (`liquid.frag.qsb`, with its source `liquid.frag`).
 
+## Transitions
+
+When you unlock, your logo doesn't just vanish: it stays put while the lock releases, then hands over to your unlock symbol, which comes in from behind it. There are fifteen ways it can go, shuffled so you see every one before any repeats:
+
+| Transition | The logo | The symbol |
+|---|---|---|
+| `fallback` | Shrinks back, sinks and fades | Grows up from behind |
+| `liftoff` | Rises away | Rises in from below |
+| `slide` | Slides out left | Slides in from the right |
+| `flip` | Turns edge-on like a card | Finishes the turn |
+| `dissolve` | Blurs away | Grows gently in |
+| `split` | Splits into top and bottom halves | Grows out of the gap |
+| `blinds` | Slides away in strips, left and right | Grows up from behind |
+| `scatter` | Breaks into tiles that drift apart | Grows out of the middle |
+| `wipe` | Erased by a sweeping scan line | Waiting behind it |
+| `glitch` | Splits into colour ghosts, tears and cuts out | Snaps in |
+| `poweroff` | Collapses to a line, then a dot | Grows from the dot |
+| `flythrough` | Rushes past you | Comes from far away |
+| `fold` | Folds into the middle | Unfolds out of it |
+| `drop` | Falls away with a tilt | Drops in from above |
+| `pixelate` | Breaks up into big pixels | Grows up from behind |
+
+There's no choice to make in setup; to pin one, pick it in Settings → Unlock → Transition (or set `handoff`). They play alongside the unlock animation on the screen you're using. Other screens, and reduced motion, get a plain crossfade. Each transition is one QML file in `handoff/` following the contract in [`handoff/README.md`](handoff/README.md); if one fails to load, the logo simply falls back.
+
 ## Wordmark styles
 
 `omarchy` (the Omarchy logo's font, letters only), `blocks`, `outline`, `scanline` (CRT stripes), `led` (dot matrix), `tiles` (mosaic), `split` (stencil cut), `italic`, `wide`, `glitch` and `shadow` (pixel drop-shadow). Every style is a single-colour silhouette, so it tints to your theme and works in every unlock animation. You can also render one yourself:
@@ -271,8 +297,11 @@ python3 tests/run-settings-close.py
 
 The tests use disposable settings and a fake compositor. The preview launcher
 prints a temporary path; control it using `qs ipc -p PATH call review status`,
-`effect cells 6 false`, `submit`, `failure`, `onboarding`, `wordmark ADA led`,
-`unlock 10 true`, `hide`, or `quit`. Each command follows `call review`.
+`effect cells 6 false`, `submit`, `failure`, `unlocking true`, `onboarding`,
+`wordmark ADA led`, `unlock 10 true`, `hide`, or `quit`. Each command follows
+`call review`.
+`logo PATH`, `fullscreen true` and `prime` check the unlock handoff: the lock
+view's settled frame should match the primed splash pixel for pixel.
 It loads the actual visual components with installed Omarchy theme modules,
 compiles but never instantiates the lock service, and exits after two minutes
 without activity. `saveSetup` writes only its disposable config.

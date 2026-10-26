@@ -40,7 +40,7 @@ KEEP_BACKUPS = 10
 IMAGE_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED = {"name", "brand", "logo", "symbol", "symbolParts", "tintLogo", "birthday", "wordmarkStyle",
            "sounds", "weather", "powerDown", "legendary", "clock", "wordmarkText", "motion",
-           "typingEffect", "brandingPresets", "presetMode", "selectedPreset"}
+           "typingEffect", "handoff", "brandingPresets", "presetMode", "selectedPreset"}
 
 
 def atomic_write(path, text):

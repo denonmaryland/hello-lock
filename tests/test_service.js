@@ -17,6 +17,7 @@ function context() {
     Presets: presetScope, realUnlockSplash: false, userConfig: {}, lockBranding: {}, lastBrandingPreset: "", brandingRotationKey: "",
     passwordPamConfigured: true, config: {powerDown: false, sounds: false},
     typingEffect: 'cells', unlockTransition: false, unlockGateDone: false,
+    builtinSymbolNames: ['radar', 'bolt', 'gear'], symbolBag: [], lockSymbol: '',
     lockRequested: false, pendingSessionLock: false, strandedLockResolved: false,
     snapshotReady: false, snapshotDir: '', snapshotFiles: {}, snapshotPending: [],
     snapshotEpoch: 0, snapshotCleanupQueue: [], pluginDir: '/plugin',
@@ -165,6 +166,24 @@ console.log('Branding preset rotation scenarios passed.');
   c.beginLock();
   assert.equal(c.lockBranding.brand, 'A', 'repeated requests must not change a locked session');
 }
+
+// "@shuffle" symbol: one draw per real lock, every built-in once per round,
+// no back-to-back repeats; a repeated lock request keeps the drawn symbol.
+{
+  const c = context();
+  const seen = [];
+  for (let i = 0; i < 9; i++) {
+    c.lockRequested = false;
+    c.beginLock();
+    const held = c.lockSymbol;
+    c.beginLock();
+    assert.equal(c.lockSymbol, held, 'repeated lock requests must not draw a new symbol');
+    seen.push(held);
+  }
+  for (let r = 0; r < 9; r += 3) assert.deepEqual(seen.slice(r, r + 3).sort(), ['bolt', 'gear', 'radar']);
+  for (let i = 1; i < seen.length; i++) assert.notEqual(seen[i], seen[i - 1], 'no back-to-back repeat');
+}
+console.log('Symbol shuffle scenarios passed.');
 
 // Evaluate the production bindings, not a separate copy of their logic.
 {

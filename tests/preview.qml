@@ -16,6 +16,12 @@ ShellRoot {
   PanelWindow {
     id: preview
     visible: false
+    // fullscreen: the real lock's geometry, to compare its handoff frame with
+    // the splash's first one.
+    property bool full: false
+    // The splash's handoff setting: a name or "shuffle".
+    property string handoffSetting: "shuffle"
+    anchors { top: full; bottom: full; left: full; right: full }
     implicitWidth: 1000
     implicitHeight: 650
     color: "#101315"
@@ -37,6 +43,8 @@ ShellRoot {
     symbolPaths: [pluginDir + "/symbols/radar.svg"]
     symbolName: "radar"
     userName: "Ada"
+    logoPath: view.logoPath
+    handoff: preview.handoffSetting
   }
   Loader {
     id: setup
@@ -162,6 +170,20 @@ ShellRoot {
       else i.save(JSON.parse("{\"" + key + "\":" + value + "}"))
       return "ok"
     }
+    // LockView's unlock handoff (logo settles, the rest fades) without PAM.
+    function unlocking(on: bool): string { timeout.restart(); view.unlocking = on; return "ok" }
+    // Lock-screen logo for both the lock view and the splash's handoff copy.
+    function logo(path: string): string { timeout.restart(); view.logoPath = path; return "ok" }
+    // Logo handoff for the following plays ("shuffle" or a name).
+    function handoff(name: string): string {
+      timeout.restart()
+      if (name !== "shuffle" && !splash.knowsHandoff(name)) return "unknown-handoff"
+      preview.handoffSetting = name
+      return "ok"
+    }
+    function fullscreen(on: bool): string { timeout.restart(); preview.full = on; return "ok" }
+    // Splash stage as it waits under the lock: the frame release reveals.
+    function prime(): string { timeout.restart(); preview.visible = false; splash.prime(); return "ok" }
     function hide(): string { preview.visible = false; setup.active = false; splash.finish(); return "ok" }
     function quit(): string { Qt.quit(); return "ok" }
   }

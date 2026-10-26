@@ -25,7 +25,7 @@ Item {
 
   signal closed()
   signal setupRequested()
-  signal unlockPreviewRequested(string symbol)
+  signal unlockPreviewRequested(string symbol, string handoff)
   signal lockPreviewRequested(string effect)
 
   // ---- Sections.
@@ -59,6 +59,7 @@ Item {
   property var customSymbol: null
   property bool legendary: true
   property string typingEffect: "cells"
+  property string handoff: "shuffle"
   property bool clock: true
   property bool powerDown: true
   property string motion: "auto"
@@ -78,7 +79,7 @@ Item {
     { value: "shadow", label: "Shadow" }
   ]
   readonly property var symbolGroups: [
-    { label: "YOURS", ids: customSymbol ? ["logo", "custom", "omarchy"] : ["logo", "omarchy"] },
+    { label: "YOURS", ids: customSymbol ? ["logo", "custom", "omarchy", "shuffle"] : ["logo", "omarchy", "shuffle"] },
     { label: "SYSTEM", ids: ["power", "prompt", "cursor", "chip", "bolt", "gear", "battery", "core"] },
     { label: "SECURITY", ids: ["shield", "key", "lock", "eye", "crosshair", "scan", "visor", "skull"] },
     { label: "SIGNAL", ids: ["radar", "antenna", "signal", "wifi", "satellite", "waveform", "link", "infinity"] },
@@ -86,6 +87,16 @@ Item {
     { label: "RANK", ids: ["chevrons", "insignia", "medal", "crown", "star", "gem", "delta"] }
   ]
   readonly property var builtinSymbols: symbolGroups.slice(1).reduce(function(all, g) { return all.concat(g.ids) }, ["omarchy"])
+  // "Shuffle" ("symbol": "@shuffle"): a different built-in every unlock. Its
+  // tile and preview cycle through them while the Unlock page is open.
+  property int shuffleIndex: 0
+  readonly property string shuffleFace: builtinSymbols[shuffleIndex % builtinSymbols.length]
+  Timer {
+    interval: 900
+    repeat: true
+    running: root.section.id === "unlock" && win.visible
+    onTriggered: root.shuffleIndex = (root.shuffleIndex + 1) % root.builtinSymbols.length
+  }
   readonly property var typingEffects: [
     { id: "cells", label: "Cells", hint: "Mosaic squares pop in, one keystroke at a time." },
     { id: "scanline", label: "Scanline", hint: "A CRT beam burns your logo in, line by line." },
@@ -97,6 +108,27 @@ Item {
     { id: "off", label: "Off", hint: "Your logo stays still while you type." },
     { id: "shuffle", label: "Shuffle", hint: "A different one every time you lock." }
   ]
+  // How the lock screen's logo hands over to the symbol (handoff/<id>.qml).
+  readonly property var handoffs: [
+    { id: "shuffle", label: "Shuffle", hint: "A different one every unlock." },
+    { id: "fallback", label: "Fall back", hint: "Your logo shrinks back as the symbol grows up from behind it." },
+    { id: "liftoff", label: "Lift off", hint: "Your logo rises away; the symbol rises in from below." },
+    { id: "slide", label: "Slide", hint: "Your logo slides out left; the symbol slides in from the right." },
+    { id: "flip", label: "Flip", hint: "Your logo turns like a card and the symbol is on the other side." },
+    { id: "dissolve", label: "Dissolve", hint: "Your logo blurs away into the symbol." },
+    { id: "split", label: "Split", hint: "Your logo splits in half and the symbol grows out of the gap." },
+    { id: "blinds", label: "Blinds", hint: "Your logo slides away in strips, left and right." },
+    { id: "scatter", label: "Scatter", hint: "Your logo breaks into tiles that drift apart." },
+    { id: "wipe", label: "Wipe", hint: "A scan line sweeps your logo away." },
+    { id: "glitch", label: "Glitch out", hint: "Your logo glitches, tears and cuts out." },
+    { id: "poweroff", label: "Power off", hint: "Your logo collapses to a dot like an old TV." },
+    { id: "flythrough", label: "Fly through", hint: "Your logo rushes past you; the symbol comes from far away." },
+    { id: "fold", label: "Fold in", hint: "Your logo folds into the middle and the symbol unfolds out of it." },
+    { id: "drop", label: "Drop", hint: "Your logo falls away; the symbol drops in from above." },
+    { id: "pixelate", label: "Pixelate", hint: "Your logo breaks up into big pixels." }
+  ]
+  readonly property string previewSymbol: symbolChoice === "shuffle" ? shuffleFace : builtinSymbols.indexOf(symbolChoice) >= 0 ? symbolChoice : ""
+  readonly property string previewHandoff: handoff === "shuffle" ? "" : handoff
 
   // ---- Wordmark preview (rendered in memory; saved files are content-named).
   property string wordmarkPreview: ""
@@ -112,11 +144,13 @@ Item {
   function symbolFile(id) {
     if (id === "logo") return logoPreview
     if (id === "custom") return customSymbol ? customSymbol.paths[0] : ""
+    if (id === "shuffle") id = shuffleFace
     return pluginDir ? pluginDir + "/symbols/" + id + ".svg" : ""
   }
   function symbolLabel(id) {
     if (id === "logo") return logoChoice === "wordmark" ? "My name" : "My logo"
     if (id === "custom") return "Custom"
+    if (id === "shuffle") return "Shuffle"
     return id.charAt(0).toUpperCase() + id.slice(1)
   }
 
@@ -179,12 +213,14 @@ Item {
       customSymbol = { paths: [expand(sym)], update: { symbol: sym, symbolParts: null } }
       symbolChoice = "custom"
     } else {
-      symbolChoice = builtin && builtinSymbols.indexOf(builtin) >= 0 ? builtin : "logo"
+      symbolChoice = builtin === "shuffle" || (builtin && builtinSymbols.indexOf(builtin) >= 0) ? builtin : "logo"
     }
 
     legendary = c.legendary !== false
     var effect = str(c.typingEffect).toLowerCase()
     typingEffect = typingEffects.some(function(e) { return e.id === effect }) ? effect : "cells"
+    var handoffId = str(c.handoff).toLowerCase()
+    handoff = handoffs.some(function(h) { return h.id === handoffId }) ? handoffId : "shuffle"
     clock = c.clock !== false
     powerDown = c.powerDown !== false
     motion = c.motion === "reduced" || c.motion === "full" ? c.motion : "auto"
@@ -944,12 +980,13 @@ Item {
                       wrapMode: Text.WordWrap
                       text: root.symbolChoice === "custom" ? "Your own symbol, set in config.json."
                         : root.symbolChoice === "logo" ? "Your logo animates when you unlock."
+                        : root.symbolChoice === "shuffle" ? "A different built-in symbol every unlock."
                         : "One of Hello Lock's console insignia."
                       color: root.muted
                       font.family: Style.font.family
                       font.pixelSize: Style.font.body
                     }
-                    Button { focusable: true; text: "Play unlock"; bordered: true; onClicked: root.unlockPreviewRequested(root.builtinSymbols.indexOf(root.symbolChoice) >= 0 ? root.symbolChoice : "") }
+                    Button { focusable: true; text: "Play unlock"; bordered: true; onClicked: root.unlockPreviewRequested(root.previewSymbol, root.previewHandoff) }
                   }
                 }
 
@@ -994,6 +1031,50 @@ Item {
                   description: "About one unlock in fifty plays a gold version."
                   checked: root.legendary
                   onClicked: { root.legendary = !root.legendary; root.save({ legendary: root.legendary }) }
+                }
+
+                // How the lock screen's logo hands over to the symbol. Not in
+                // setup on purpose: it shuffles unless someone picks one here.
+                Column {
+                  width: parent.width
+                  spacing: 10
+
+                  Text {
+                    text: "TRANSITION"
+                    color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.45)
+                    font.family: "Share Tech Mono"
+                    font.pixelSize: 11
+                    font.letterSpacing: 1.5
+                  }
+                  Flow {
+                    width: parent.width
+                    spacing: 8
+                    Repeater {
+                      model: root.handoffs
+                      Button {
+                        focusable: true
+                        required property var modelData
+                        text: modelData.label
+                        bordered: true
+                        selected: root.handoff === modelData.id
+                        onClicked: { root.handoff = modelData.id; root.save({ handoff: modelData.id }) }
+                      }
+                    }
+                  }
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: root.handoffs.filter(function(h) { return h.id === root.handoff })[0].hint
+                    color: root.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.body
+                  }
+                  Button {
+                    focusable: true
+                    text: "Play transition"
+                    bordered: true
+                    onClicked: root.unlockPreviewRequested(root.previewSymbol, root.previewHandoff)
+                  }
                 }
               }
 

@@ -480,6 +480,8 @@ def check_image(S, key, value, config_dir, plugin_dir, symbols):
     v = value.strip()
     if not v:
         return
+    if key == "symbol" and v == "@shuffle":  # a different built-in each unlock
+        return
     if v.startswith("@"):
         name = v[1:]
         if not re.fullmatch(r"[a-z0-9-]+", name) or name not in symbols:
