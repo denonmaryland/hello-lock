@@ -192,10 +192,39 @@ Item {
   // ---- Saving. Changes are merged into one pending update and written after
   // a short pause, so typing a name is one save rather than one per letter.
   // The first write of a visit keeps a timestamped backup; later ones don't.
+  // Keep the loader alive until debounced edits and helper processes settle.
+  // Emitting closed/setupRequested immediately would destroy their timers.
+  property string exitAction: ""
+  property bool saveFailed: false
+  function requestExit(action) {
+    if (exitAction) return
+    exitAction = action
+    exitTimer.start()
+  }
+  Timer {
+    id: exitTimer
+    interval: 30
+    repeat: true
+    onTriggered: {
+      if (saveTimer.running || saveProc.running || Object.keys(root.pending).length
+          || soundTimer.running || soundSaveProc.running || Object.keys(root.soundPending).length
+          || wordmarkTimer.running || wordmarkProc.running || importProc.running) return
+      stop()
+      var action = root.exitAction
+      root.exitAction = ""
+      // A failed write must leave the window and its error visible once;
+      // asking again closes, so a broken config can't trap the window.
+      if (root.saveFailed) { root.saveFailed = false; return }
+      if (action === "setup") root.setupRequested()
+      else root.closed()
+    }
+  }
+
   property var pending: ({})
   property bool savedOnce: false
   property string status: ""        // "" | "saving" | "saved" | an error
   function save(update, delay) {
+    saveFailed = false
     var merged = Object.assign({}, pending)
     for (var k in update) merged[k] = update[k]
     pending = merged
@@ -226,6 +255,7 @@ Item {
         root.status = "saved"
         savedFade.restart()
       } else {
+        root.saveFailed = true
         root.status = String(saveErr.text || "").replace(/^hello-config: /, "").trim() || "Couldn't save that change."
       }
     }
@@ -233,6 +263,7 @@ Item {
 
   property var soundPending: ({})
   function saveSound(update) {
+    saveFailed = false
     soundPending = Object.assign({}, soundPending, update)
     status = "saving"
     soundTimer.restart()
@@ -252,7 +283,10 @@ Item {
     stderr: StdioCollector { id: soundSaveErr; waitForEnd: true }
     onExited: function(code) {
       if (code === 0) { root.status = "saved"; savedFade.restart() }
-      else root.status = String(soundSaveErr.text || "").replace(/^hello-config: /, "").trim() || "Couldn't save the sound settings."
+      else {
+        root.saveFailed = true
+        root.status = String(soundSaveErr.text || "").replace(/^hello-config: /, "").trim() || "Couldn't save the sound settings."
+      }
     }
   }
   Process {
@@ -287,7 +321,15 @@ Item {
     return /^\d{1,2}$/.test(birthMonth) && /^\d{1,2}$/.test(birthDay) && m >= 1 && m <= 12 && d >= 1 && d <= days[m - 1]
   }
   function saveBirthday() {
-    if (!birthdayValid) return
+    if (!birthdayValid) {
+      // Don't let a queued, half-typed date ("1" on the way to "13") land.
+      if (!pending.hasOwnProperty("birthday")) return
+      var rest = Object.assign({}, pending)
+      delete rest.birthday
+      pending = rest
+      if (Object.keys(rest).length === 0 && !saveProc.running) { saveTimer.stop(); status = "" }
+      return
+    }
     save({ birthday: birthMonth && birthDay ? pad2(birthMonth) + "-" + pad2(birthDay) : null }, 500)
   }
 
@@ -401,7 +443,7 @@ Item {
       opacity: 0
       Component.onCompleted: opacity = 1
       Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-      MouseArea { anchors.fill: parent; onClicked: root.closed() }
+      MouseArea { anchors.fill: parent; onClicked: root.requestExit("close") }
     }
 
     FocusScope {
@@ -417,7 +459,7 @@ Item {
       Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
       Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape) { root.closed(); event.accepted = true }
+        if (event.key === Qt.Key_Escape) { root.requestExit("close"); event.accepted = true }
         else if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_PageDown || event.key === Qt.Key_Tab)) { root.moveSection(1); event.accepted = true }
         else if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_PageUp || event.key === Qt.Key_Backtab)) { root.moveSection(-1); event.accepted = true }
       }
@@ -514,7 +556,7 @@ Item {
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
             }
-            LinkText { label: "Run the setup again"; onClicked: root.setupRequested() }
+            LinkText { label: "Run the setup again"; onClicked: root.requestExit("setup") }
           }
         }
 
@@ -549,7 +591,7 @@ Item {
             anchors { top: parent.top; right: parent.right; margins: 16 }
             color: closeMouse.containsMouse ? Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.1) : "transparent"
             Text { anchors.centerIn: parent; text: "✕"; color: root.muted; font.pixelSize: 15 }
-            MouseArea { id: closeMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.closed() }
+            MouseArea { id: closeMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.requestExit("close") }
           }
 
           Flickable {
@@ -768,6 +810,7 @@ Item {
                         SymbolTile {
                           required property string modelData
                           source: root.symbolFile(modelData)
+                          source2: modelData === "custom" && root.customSymbol && root.customSymbol.paths.length > 1 ? root.customSymbol.paths[1] : ""
                           tinted: modelData === "logo" ? root.logoTinted : modelData === "custom" ? root.tintLogo : true
                           selected: root.symbolChoice === modelData
                           onClicked: root.chooseSymbol(modelData)
@@ -1040,6 +1083,7 @@ Item {
     id: tile
     property string source: ""
     property bool tinted: true
+    property string source2: ""
     property bool selected: false
     readonly property bool hovered: tileMouse.containsMouse
     signal clicked()
@@ -1069,6 +1113,25 @@ Item {
       anchors.fill: tileImage
       source: tileImage
       visible: tileImage.status === Image.Ready
+      brightness: tile.tinted ? 1 : 0
+      colorization: tile.tinted ? 1 : 0
+      colorizationColor: tile.selected ? root.accent : root.fg
+    }
+    // A custom symbol can be two layered parts; show both, as the preview does.
+    Image {
+      id: tileImage2
+      anchors.fill: tileImage
+      source: tile.source2 ? root.fileUrl(tile.source2, root.previewVersion) : ""
+      fillMode: Image.PreserveAspectFit
+      sourceSize.width: 64
+      asynchronous: true
+      cache: false
+      visible: false
+    }
+    MultiEffect {
+      anchors.fill: tileImage2
+      source: tileImage2
+      visible: tile.source2 !== "" && tileImage2.status === Image.Ready
       brightness: tile.tinted ? 1 : 0
       colorization: tile.tinted ? 1 : 0
       colorizationColor: tile.selected ? root.accent : root.fg

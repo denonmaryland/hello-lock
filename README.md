@@ -224,6 +224,7 @@ MIT License; see [LICENSE](LICENSE).
 python3 -m unittest discover -s tests -v
 node tests/test_service.js
 python3 tests/run-preview.py
+python3 tests/run-settings-close.py
 ```
 
 The tests use disposable settings and a fake compositor. The preview launcher
@@ -237,3 +238,8 @@ without activity. `saveSetup` writes only its disposable config.
 See [the review record](docs/code-review-2026-10-25.md) for the skill comparison,
 fixes, validation evidence, and remaining limits. Real authentication and
 multi-monitor behavior still require separate manual verification.
+
+The settings-close regression check requires a running Wayland desktop. It uses
+disposable settings and Settings.qml only to check debounced writes before close
+or setup, reopening, custom-symbol restoration, and failed-write behavior. It does
+not load the lock service or exercise native mouse interactions.
