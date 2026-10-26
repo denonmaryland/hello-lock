@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- `hello-lock-doctor` suggests Omarchy's own `omarchy pkg add` to install a missing tool.
+- A preview image for the Omarchy plugin marketplace.
+
 ## 0.3.1
 
 - Unlock previews show your current branding; a real unlock keeps the preset that was chosen for that lock.

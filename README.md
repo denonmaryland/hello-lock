@@ -43,7 +43,7 @@ The first time the shell starts with Hello Lock, a short setup screen opens. It 
 
 5. **How it reacts as you type:** one of the [typing effects](#typing-effects), previewed live on your logo.
 
-<p align="center"><img src="docs/setup.gif" alt="The setup screen: typing a wordmark, trying styles, picking an unlock symbol" width="620"></p>
+<p align="center"><img src="docs/onboarding.gif" alt="The setup screen: typing a wordmark, trying styles, picking an unlock symbol" width="620"></p>
 
 Then **Save and try it** plays your unlock animation. Enter goes forward and Esc goes back. On the logo step, ↑/↓ switch options and Tab / Shift+Tab change the wordmark style. On the symbol step, ←/→ move along a row, ↑/↓ change rows, and the symbol's name shows below the grid. On the typing step, ←/→ or Tab pick the effect. Run the setup again any time, or use [Settings](#settings) to change one thing:
 
