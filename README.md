@@ -73,7 +73,7 @@ A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows a
 To open it from the Omarchy menu, add this line to `~/.config/omarchy/extensions/omarchy-menu.jsonc`. It appears under **Style**:
 
 ```jsonc
-"style.lockscreen": {"icon":"","label":"Lock Screen","action":"omarchy-shell lock settings"},
+"style.lockscreen": {"icon":"","label":"Lock Screen","action":"omarchy-shell lock settings"},
 ```
 
 ## Install
