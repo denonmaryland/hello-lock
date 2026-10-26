@@ -53,11 +53,43 @@ Item {
   readonly property var configDefaults: ({
     name: "", brand: "", logo: "", symbol: "", symbolParts: [], tintLogo: true,
     birthday: "", sounds: true, weather: true, powerDown: true, legendary: true, clock: true,
-    motion: "auto", typingEffect: "cells"
+    motion: "auto", typingEffect: "cells", brandingPresets: [], presetMode: "manual", selectedPreset: ""
   })
   property var userConfig: ({})
   property string accountName: ""
-  readonly property var config: Object.assign({}, configDefaults, userConfig)
+  property var lockBranding: ({})
+  property string lastBrandingPreset: ""
+  property string brandingRotationKey: ""
+  readonly property bool brandingFrozen: lockRequested || unlockTransition || sessionLock.locked
+    || (unlockSplashLoader.item !== null && unlockSplashLoader.item.shown)
+  readonly property var config: Object.assign({}, configDefaults, userConfig, brandingFrozen ? lockBranding : {})
+
+  // Select once per lock. Previewing and repeated lock requests never advance it.
+  function selectLockBranding() {
+    var keys = ["brand", "logo", "symbol", "symbolParts", "tintLogo", "wordmarkText", "wordmarkStyle"]
+    var defaults = {brand: "", logo: "", symbol: "", symbolParts: [], tintLogo: true, wordmarkText: "", wordmarkStyle: "blocks"}
+    var chosen = userConfig || {}
+    var pool = Array.isArray(chosen.brandingPresets) ? chosen.brandingPresets.filter(function(p) {
+      return p && typeof p.id === "string" && p.branding && typeof p.branding === "object" && !Array.isArray(p.branding)
+    }) : []
+    if (pool.length && (chosen.presetMode === "cycle" || chosen.presetMode === "shuffle")) {
+      var rotationKey = JSON.stringify([chosen.presetMode, chosen.selectedPreset, pool.map(function(p) { return p.id })])
+      var previous = (brandingRotationKey === rotationKey ? lastBrandingPreset : "") || chosen.selectedPreset || ""
+      brandingRotationKey = rotationKey
+      var index = pool.findIndex(function(p) { return p.id === previous })
+      if (chosen.presetMode === "cycle") index = (index + 1) % pool.length
+      else {
+        var candidates = pool.filter(function(p) { return pool.length === 1 || p.id !== previous })
+        var pick = candidates[Math.floor(Math.random() * candidates.length)]
+        index = pool.indexOf(pick)
+      }
+      lastBrandingPreset = pool[index].id
+      chosen = pool[index].branding
+    }
+    var snapshot = {}
+    keys.forEach(function(k) { snapshot[k] = chosen[k] === undefined || chosen[k] === null ? defaults[k] : chosen[k] })
+    lockBranding = snapshot
+  }
   // Greeting name: config, else the account's full name, else the login name.
   readonly property string displayName: cleanConfigText(config.name) || accountName
     || (userName ? userName.charAt(0).toUpperCase() + userName.slice(1) : "friend")
@@ -363,6 +395,7 @@ Item {
     unlockGateDone = false
     unlockTransition = false
     if (!root.currentlyLocked()) {
+      try { selectLockBranding() } catch (e) { lockBranding = {}; console.warn("hello-lock preset selection failed: " + e) }
       lockStartedAt = Date.now()
       root.refreshMotion()
       if (typingEffect === "shuffle") lockTypingEffect = drawShuffle()

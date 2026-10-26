@@ -243,3 +243,38 @@ The settings-close regression check requires a running Wayland desktop. It uses
 disposable settings and Settings.qml only to check debounced writes before close
 or setup, reopening, custom-symbol restoration, and failed-write behavior. It does
 not load the lock service or exercise native mouse interactions.
+
+
+### Brand presets
+
+Open `omarchy-shell lock settings` and select **Presets**. Set your brand text in
+**You**, choose a logo in **Logo** and a symbol in **Unlock**, then give the
+combination a name and choose **Save new**. Names such as “Company / Primary” and
+“Company / Alternate” keep multiple versions easy to identify.
+
+- **Use** restores a saved combination; **Use next** advances in saved order.
+- **Update selected** replaces that preset with your current branding and name.
+  Editing branding does not change the saved preset until you update it.
+- **Delete selected** asks for confirmation and leaves current branding intact.
+- **On each lock** chooses current branding, cycling in saved order, or shuffling
+  without an immediate repeat when at least two presets exist. All saved presets
+  participate. A single preset stays fixed; an empty collection uses current branding.
+
+Presets include brand text, logo/wordmark, tint and the unlock symbol (including
+two-part custom symbols). Name, birthday, typing effect, motion, sound and weather
+remain independent. Preset images are copied into Hello Lock’s private config
+folder, so moving the original image does not break a saved preset. Deleting a
+preset retains image files for other presets and config backups.
+
+Rotation chooses once per lock and keeps the branding through unlock. Previews
+and repeated lock requests do not advance it. The rotation position is kept in
+memory; after a shell restart, cycling resumes after the manually selected preset.
+Using a preset, changing rotation mode or changing the collection resets that
+starting point. Presets live in `~/.config/hello-lock/config.json` as
+`brandingPresets`, `selectedPreset` and `presetMode`; normal config backups cover them.
+
+For scripting: `bin/hello-config preset create "Company / Primary"`,
+`preset update "New name"`, `preset apply ID`, `preset next ""`,
+`preset delete ID`, and `preset mode manual|cycle|shuffle`. Each successful command
+prints the updated config. Settings waits for pending edits and image/wordmark work
+before running a preset operation.

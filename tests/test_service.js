@@ -11,6 +11,7 @@ function context() {
   const timer = () => ({running: false, stop() { this.running = false }, start() { this.running = true }, restart() { this.running = true }});
   const c = {
     console: {warn() {}, log() {}}, Date, Object, Math,
+    userConfig: {}, lockBranding: {}, lastBrandingPreset: "", brandingRotationKey: "",
     passwordPamConfigured: true, config: {powerDown: false, sounds: false},
     typingEffect: 'cells', unlockTransition: false, unlockGateDone: false,
     lockRequested: false, pendingSessionLock: false, strandedLockResolved: false,
@@ -120,3 +121,44 @@ function context() {
   assert.equal(c.snapshotExpiry.running, true);
 }
 console.log('7 service regression scenarios passed (mock compositor; no real lock).');
+
+// Branding rotates once, stays separate from personal settings, and tolerates
+// removed/empty presets. No compositor or authentication is involved.
+{
+  const c = context();
+  c.userConfig = {name: 'Person', brand: 'Base', selectedPreset: 'a', presetMode: 'cycle',
+    brandingPresets: [{id:'a', branding:{brand:'A', symbol:'@radar'}},
+                     {id:'b', branding:{brand:'B', symbolParts:['one','two'], name:'Wrong'}}]};
+  c.selectLockBranding();
+  assert.equal(c.lockBranding.brand, 'B');
+  assert.equal(c.lockBranding.name, undefined);
+  c.selectLockBranding();
+  assert.equal(c.lockBranding.brand, 'A');
+  assert.equal(c.lockBranding.symbolParts.length, 0);
+  c.userConfig.presetMode = 'shuffle';
+  c.selectLockBranding();
+  for (let i=0;i<20;i++) {
+    const previous = c.lastBrandingPreset;
+    c.selectLockBranding();
+    assert.notEqual(c.lastBrandingPreset, previous);
+  }
+  c.userConfig.brandingPresets = [c.userConfig.brandingPresets[0]];
+  c.selectLockBranding();
+  assert.equal(c.lockBranding.brand, 'A');
+  c.userConfig.brandingPresets = [];
+  c.selectLockBranding();
+  assert.equal(c.lockBranding.brand, 'Base');
+  c.userConfig.presetMode = 'manual';
+  c.selectLockBranding();
+  assert.equal(c.lockBranding.brand, 'Base');
+}
+console.log('Branding preset rotation scenarios passed.');
+
+{
+  const c = context();
+  c.userConfig = {presetMode:'cycle', brandingPresets:[{id:'a',branding:{brand:'A'}},{id:'b',branding:{brand:'B'}}]};
+  c.beginLock();
+  assert.equal(c.lockBranding.brand, 'A');
+  c.beginLock();
+  assert.equal(c.lockBranding.brand, 'A', 'repeated requests must not change a locked session');
+}

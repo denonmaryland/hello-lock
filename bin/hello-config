@@ -11,6 +11,9 @@
                                 quiet hours off
   hello-config import-logo PATH copy an image into ~/.config/hello-lock/ and print
                                 the new path (so moving the original later is safe)
+  hello-config preset ACTION VALUE
+                                create/update NAME, apply/delete ID, next "",
+                                or mode manual|cycle|shuffle; prints saved config
   hello-config done             mark onboarding as finished
   hello-config pending          exit 0 if onboarding has never been finished
   hello-config doctor [ARGS]    check the install and config (runs hello-lock-doctor)
@@ -37,7 +40,7 @@ KEEP_BACKUPS = 10
 IMAGE_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED = {"name", "brand", "logo", "symbol", "symbolParts", "tintLogo", "birthday", "wordmarkStyle",
            "sounds", "weather", "powerDown", "legendary", "clock", "wordmarkText", "motion",
-           "typingEffect"}
+           "typingEffect", "brandingPresets", "presetMode", "selectedPreset"}
 
 
 def atomic_write(path, text):
@@ -161,7 +164,7 @@ def sound_save(raw):
                     fmt(values["quietStart"]), fmt(values["quietEnd"])))
 
 
-def import_logo(path):
+def import_logo(path, announce=True):
     src = os.path.realpath(os.path.expanduser(path))
     ext = os.path.splitext(src)[1].lower()
     if ext not in IMAGE_TYPES or not os.path.isfile(src):
@@ -181,14 +184,92 @@ def import_logo(path):
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
-    print(dest)
+    if announce:
+        print(dest)
+    return dest
 
+
+
+BRANDING_KEYS = ("brand", "logo", "symbol", "symbolParts", "tintLogo", "wordmarkText", "wordmarkStyle")
+
+
+def presets(action, value):
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            current = json.load(f)
+    except FileNotFoundError:
+        current = {}
+    if not isinstance(current, dict):
+        raise ValueError("existing config must be an object")
+    items = current.get("brandingPresets", [])
+    if not isinstance(items, list) or any(not isinstance(p, dict) or not isinstance(p.get("branding"), dict)
+                                          or not isinstance(p.get("id"), str) for p in items):
+        raise ValueError("invalid branding preset collection")
+    update = {}
+    if action in ("create", "update"):
+        name = value.strip()
+        if not name or len(name) > 60:
+            raise ValueError("give the preset a name of 1–60 characters")
+        if action == "create" and any(p.get("name", "").casefold() == name.casefold() for p in items):
+            raise ValueError("that preset name already exists")
+        selected = current.get("selectedPreset")
+        if action == "update" and not any(p["id"] == selected for p in items):
+            raise ValueError("select a preset to update")
+        if action == "update" and any(p["id"] != selected and p.get("name", "").casefold() == name.casefold() for p in items):
+            raise ValueError("that preset name already exists")
+        branding = {k: current[k] for k in BRANDING_KEYS if k in current}
+        def preserve(path):
+            if not path or path.startswith("@"):
+                return path
+            path = os.path.expanduser(path)
+            if not os.path.isabs(path):
+                path = os.path.join(CONFIG_DIR, path)
+            return os.path.basename(import_logo(path, announce=False))
+        for key in ("logo", "symbol"):
+            if branding.get(key):
+                branding[key] = preserve(branding[key])
+        if branding.get("symbolParts"):
+            branding["symbolParts"] = [preserve(p) for p in branding["symbolParts"]]
+        import uuid
+        ident = selected if action == "update" else uuid.uuid4().hex
+        item = {"id": ident, "name": name, "branding": branding}
+        items = [item if p["id"] == ident else p for p in items] if action == "update" else items + [item]
+        update = {"brandingPresets": items, "selectedPreset": ident}
+    elif action in ("apply", "next"):
+        if not items:
+            raise ValueError("save a preset first")
+        if action == "next":
+            ids = [p["id"] for p in items]
+            previous = current.get("selectedPreset")
+            value = ids[(ids.index(previous) + 1) % len(ids)] if previous in ids else ids[0]
+        item = next((p for p in items if p["id"] == value), None)
+        if item is None:
+            raise ValueError("preset no longer exists")
+        update = {k: item["branding"].get(k) for k in BRANDING_KEYS}
+        update["selectedPreset"] = value
+    elif action == "delete":
+        if not any(p["id"] == value for p in items):
+            raise ValueError("preset no longer exists")
+        update = {"brandingPresets": [p for p in items if p["id"] != value]}
+        if current.get("selectedPreset") == value:
+            update["selectedPreset"] = None
+    elif action == "mode":
+        if value not in ("manual", "cycle", "shuffle"):
+            raise ValueError("unknown preset mode")
+        update = {"presetMode": value}
+    else:
+        raise ValueError("unknown preset action")
+    save(json.dumps(update))
+    with open(CONFIG, encoding="utf-8") as f:
+        print(f.read())
 
 def main(argv):
     if len(argv) >= 2 and argv[1] == "doctor":
         doctor = os.path.join(os.path.dirname(os.path.realpath(__file__)), "hello-lock-doctor")
         os.execv(sys.executable, [sys.executable, "-I", doctor] + argv[2:])
-    if len(argv) == 3 and argv[1] == "save":
+    if len(argv) == 4 and argv[1] == "preset":
+        presets(argv[2], argv[3])
+    elif len(argv) == 3 and argv[1] == "save":
         save(argv[2])
     elif len(argv) == 4 and argv[1] == "save" and argv[2] == "--no-backup":
         save(argv[3], backup=False)

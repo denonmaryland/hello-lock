@@ -35,6 +35,68 @@ class Helpers(unittest.TestCase):
         return subprocess.run([str(ROOT / "bin" / name), *args], env=self.env, cwd=self.home,
                               capture_output=True, text=True, timeout=5)
 
+    def preset(self, action, value=""):
+        result = self.run_helper("hello-config", "preset", action, value)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_presets_preserve_assets_and_unrelated_preferences(self):
+        logo = self.home / "company.svg"
+        logo.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+        self.cfg.write_text(json.dumps({"brand": "Company", "logo": str(logo),
+            "symbolParts": [str(logo), str(logo)], "name": "Person", "weather": False}))
+        first = self.preset("create", "Company / Primary")
+        ident = first["selectedPreset"]
+        logo.unlink()
+        self.assertTrue((self.cfg.parent / first["brandingPresets"][0]["branding"]["logo"]).is_file())
+        self.run_helper("hello-config", "save", '{"brand":"Other","logo":null,"symbolParts":null,"symbol":"@radar"}')
+        second = self.preset("create", "Company / Alternate")
+        other = second["selectedPreset"]
+        restored = self.preset("apply", ident)
+        self.assertEqual(restored["brand"], "Company")
+        self.assertEqual(len(restored["symbolParts"]), 2)
+        self.assertNotIn("symbol", restored)
+        self.assertEqual(restored["name"], "Person")
+        self.assertFalse(restored["weather"])
+        self.assertEqual(self.preset("next")["selectedPreset"], other)
+        self.assertNotIn("symbolParts", json.loads(self.cfg.read_text()))
+        self.assertEqual(self.preset("mode", "shuffle")["presetMode"], "shuffle")
+        updated = self.preset("update", "Renamed")
+        self.assertEqual(updated["brandingPresets"][1]["name"], "Renamed")
+        deleted = self.preset("delete", other)
+        self.assertEqual(len(deleted["brandingPresets"]), 1)
+        self.assertNotIn("selectedPreset", deleted)
+        self.assertEqual(deleted["symbol"], "@radar")
+
+    def test_wordmark_preset_restores_text_and_style(self):
+        self.run_helper("hello-config", "save", '{"wordmarkText":"ACME","wordmarkStyle":"outline","tintLogo":false}')
+        first = self.preset("create", "Wordmark")
+        self.run_helper("hello-config", "save", '{"wordmarkText":null,"logo":null,"wordmarkStyle":null,"tintLogo":true}')
+        restored = self.preset("apply", first["selectedPreset"])
+        self.assertEqual(restored["wordmarkText"], "ACME")
+        self.assertEqual(restored["wordmarkStyle"], "outline")
+        self.assertFalse(restored["tintLogo"])
+        self.assertTrue((self.cfg.parent / restored["logo"]).is_file())
+
+    def test_missing_preset_asset_does_not_change_config(self):
+        self.cfg.write_text('{"logo":"missing.svg","brand":"Keep"}')
+        before = self.cfg.read_bytes()
+        self.assertNotEqual(self.run_helper("hello-config", "preset", "create", "Missing").returncode, 0)
+        self.assertEqual(self.cfg.read_bytes(), before)
+
+    def test_bad_preset_operations_preserve_config(self):
+        self.cfg.write_text('{"brand":"Before"}')
+        self.preset("create", "One")
+        before = self.cfg.read_bytes()
+        for action, value in [("create", "one"), ("create", " "), ("apply", "missing"),
+                              ("delete", "missing"), ("mode", "invalid")]:
+            result = self.run_helper("hello-config", "preset", action, value)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.cfg.read_bytes(), before)
+        self.cfg.write_text('{broken')
+        self.assertNotEqual(self.run_helper("hello-config", "preset", "create", "Two").returncode, 0)
+        self.assertEqual(self.cfg.read_text(), '{broken')
+
     def test_save_merges_preserves_unknown_keys_and_backs_up(self):
         before = '{"weather":false,"custom":{"x":1},"name":"Before"}\n'
         self.cfg.write_text(before)

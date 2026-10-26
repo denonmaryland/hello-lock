@@ -52,6 +52,10 @@ ShellRoot {
    else if (kind === "wordmark") {
     i.logoChoice = "wordmark"; i.wordmarkText = "QA"; i.renderWordmark(true); i.requestExit("setup")
    } else if (kind === "custom") { i.chooseSymbol("radar"); i.chooseSymbol("custom"); i.requestExit("close") }
+   else if (kind === "preset-close") {
+    i.save({brand: "Queued brand"}, 300)
+    i.runPreset("create", "Queued preset"); i.requestExit("close")
+   }
    else if (kind === "close") i.requestExit("close")
    else if (kind === "birthday") {
     i.birthMonth = "1"; i.birthDay = "14"; i.saveBirthday()
@@ -59,9 +63,16 @@ ShellRoot {
    }
    return "ok"
   }
+  function preset(action: string, value: string): string {
+   settings.item.sectionIndex = settings.item.sections.findIndex(function(s) { return s.id === "presets" })
+   settings.item.runPreset(action, value); return "ok"
+  }
   function status(): string {
    return JSON.stringify({active: settings.active, lastExit: root.lastExit,
     name: settings.item ? settings.item.name : "",
+    presetBusy: settings.item ? settings.item.presetBusy : false,
+    selectedPreset: settings.item ? settings.item.selectedPreset : "",
+    presets: settings.item ? settings.item.brandingPresets : [],
     status: settings.item ? settings.item.status : "closed"})
   }
   function quit(): string { Qt.quit(); return "ok" }
@@ -142,6 +153,30 @@ class SettingsClose(unittest.TestCase):
         self.wait_for(lambda: not json.loads(self.call("status"))["active"])
         self.assertEqual(json.loads(self.call("status"))["lastExit"], exit_action)
         return json.loads(self.config.read_text())
+
+    def test_preset_waits_for_autosave_and_close(self):
+        self.open()
+        saved = self.edit_close("preset-close")
+        self.assertEqual(saved["brandingPresets"][0]["branding"]["brand"], "Queued brand")
+        self.assertEqual(saved["name"], "Before")
+
+    def test_preset_ui_create_apply_delete_and_retry(self):
+        self.open({"brand": "Brand", "symbolParts": ["one.svg", "two.svg"]})
+        def run(action, value=""):
+            self.call("preset", action, value)
+            self.wait_for(lambda: not json.loads(self.call("status"))["presetBusy"])
+            return json.loads(self.call("status"))
+        first = run("create", "First")
+        ident = first["selectedPreset"]
+        self.assertEqual(len(first["presets"]), 1)
+        failed = run("create", "First")
+        self.assertIn("already exists", failed["status"])
+        second = run("create", "Second")
+        self.assertEqual(len(second["presets"]), 2)
+        self.assertEqual(run("apply", ident)["selectedPreset"], ident)
+        run("mode", "cycle")
+        self.assertEqual(json.loads(self.config.read_text())["presetMode"], "cycle")
+        self.assertEqual(len(run("delete", ident)["presets"]), 1)
 
     def test_name_persists_on_immediate_close_and_reopen(self):
         self.open()

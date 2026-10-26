@@ -35,6 +35,7 @@ Item {
     { id: "typing", label: "Typing", title: "Typing", hint: "What your logo does while you type your password." },
     { id: "lock", label: "Lock screen", title: "Lock screen", hint: "What you see when you lock." },
     { id: "sound", label: "Sound", title: "Sound", hint: "Lock, unlock and wrong-password sounds." },
+    { id: "presets", label: "Presets", title: "Brand presets", hint: "Keep several logos and symbols ready to use." },
     { id: "privacy", label: "Weather", title: "Weather", hint: "The only thing Hello Lock fetches from the internet." }
   ]
   property int sectionIndex: 0
@@ -148,6 +149,10 @@ Item {
 
   function start() {
     var c = currentConfig || {}
+    brandingPresets = Array.isArray(c.brandingPresets) ? c.brandingPresets : []
+    selectedPreset = str(c.selectedPreset)
+    presetMode = str(c.presetMode) || "manual"
+    presetName = (brandingPresets.find(function(p) { return p.id === selectedPreset }) || {}).name || ""
     name = str(c.name)
     var b = str(c.birthday).split("-")
     birthMonth = b.length === 2 ? b[0] : ""
@@ -189,6 +194,59 @@ Item {
     sectionIndex = 0
   }
 
+  property var brandingPresets: []
+  property string selectedPreset: ""
+  property string presetMode: "manual"
+  property string presetName: ""
+  property string presetAction: ""
+  property string presetValue: ""
+  property bool confirmPresetDelete: false
+  readonly property bool presetBusy: presetWait.running || presetProc.running
+  function runPreset(action, value) {
+    if (presetBusy) return
+    confirmPresetDelete = false
+    presetAction = action
+    presetValue = value
+    presetWait.start()
+  }
+  Timer {
+    id: presetWait
+    interval: 40
+    repeat: true
+    onTriggered: {
+      if (saveTimer.running || saveProc.running || Object.keys(root.pending).length
+          || soundTimer.running || soundSaveProc.running || Object.keys(root.soundPending).length
+          || wordmarkTimer.running || wordmarkProc.running || importProc.running) return
+      stop()
+      if (root.saveFailed || root.wordmarkError) {
+        root.status = "Fix the unsaved change before using presets."
+        return
+      }
+      presetProc.command = [root.pluginDir + "/bin/hello-config", "preset", root.presetAction, root.presetValue]
+      presetProc.running = true
+    }
+  }
+  Process {
+    id: presetProc
+    stdout: StdioCollector { id: presetOutput; waitForEnd: true }
+    stderr: StdioCollector { id: presetError; waitForEnd: true }
+    onExited: function(code) {
+      if (code !== 0) {
+        root.status = String(presetError.text || "Couldn't save preset.").trim()
+        return
+      }
+      try {
+        var section = root.sectionIndex
+        root.currentConfig = JSON.parse(presetOutput.text)
+        root.start()
+        root.sectionIndex = section
+        root.saveFailed = false
+        root.status = "saved"
+        savedFade.restart()
+      } catch (e) { root.status = "Couldn't reload presets: " + e }
+    }
+  }
+
   // ---- Saving. Changes are merged into one pending update and written after
   // a short pause, so typing a name is one save rather than one per letter.
   // The first write of a visit keeps a timestamped backup; later ones don't.
@@ -206,7 +264,7 @@ Item {
     interval: 30
     repeat: true
     onTriggered: {
-      if (saveTimer.running || saveProc.running || Object.keys(root.pending).length
+      if (presetWait.running || presetProc.running || saveTimer.running || saveProc.running || Object.keys(root.pending).length
           || soundTimer.running || soundSaveProc.running || Object.keys(root.soundPending).length
           || wordmarkTimer.running || wordmarkProc.running || importProc.running) return
       stop()
@@ -604,10 +662,86 @@ Item {
 
             Column {
               id: page
+              enabled: !root.presetBusy
               x: 32
               width: scroller.width - 64
               spacing: 14
               NumberAnimation { id: pageFade; target: page; property: "opacity"; from: 0; to: 1; duration: 160; easing.type: Easing.OutCubic }
+
+              // ---- Presets. All writes wait for the normal autosave queue.
+              Column {
+                visible: root.section.id === "presets"
+                width: parent.width
+                spacing: 14
+                Field {
+                  label: "On each lock"
+                  hint: "Cycle follows saved order. Shuffle avoids the previous preset. With no presets, your current branding is used."
+                  Dropdown {
+                    width: 260
+                    showLabel: false
+                    options: [{value: "manual", label: "Keep current branding"}, {value: "cycle", label: "Cycle presets"}, {value: "shuffle", label: "Shuffle presets"}]
+                    value: root.presetMode
+                    onChanged: function(v) { root.runPreset("mode", v) }
+                  }
+                }
+                Field {
+                  label: "Save current branding"
+                  hint: "Includes brand text, logo or wordmark, tint and unlock symbol. Change these in You, Logo and Unlock, then save a new preset or update the selected one."
+                  TextField {
+                    width: 320
+                    text: root.presetName
+                    placeholderText: "Company / Primary logo"
+                    maximumLength: 60
+                    onTextEdited: root.presetName = text
+                  }
+                }
+                Flow {
+                  width: parent.width
+                  spacing: 10
+                  Button { focusable: true; text: "Save new"; bordered: true; enabled: !!root.presetName.trim(); onClicked: root.runPreset("create", root.presetName) }
+                  Button { focusable: true; text: "Update selected"; bordered: true; enabled: !!root.selectedPreset && !!root.presetName.trim(); onClicked: root.runPreset("update", root.presetName) }
+                  Button { focusable: true; text: "Use next"; bordered: true; enabled: root.brandingPresets.length > 0; onClicked: root.runPreset("next", "") }
+                }
+                Text {
+                  visible: root.brandingPresets.length === 0
+                  text: "No presets yet. Save your current branding to get started."
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  color: root.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                }
+                Repeater {
+                  model: root.brandingPresets
+                  delegate: Row {
+                    required property var modelData
+                    width: parent.width
+                    spacing: 12
+                    Text {
+                      width: Math.max(100, page.width - 100)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: (modelData.id === root.selectedPreset ? "● " : "") + modelData.name
+                      elide: Text.ElideRight
+                      color: root.fg
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.body
+                    }
+                    Button { focusable: true; text: "Use"; bordered: true; onClicked: root.runPreset("apply", modelData.id) }
+                  }
+                }
+                Flow {
+                  width: parent.width
+                  spacing: 10
+                  visible: !!root.selectedPreset
+                  Button {
+                    focusable: true
+                    text: root.confirmPresetDelete ? "Confirm delete" : "Delete selected"
+                    bordered: true
+                    onClicked: { if (root.confirmPresetDelete) root.runPreset("delete", root.selectedPreset); else root.confirmPresetDelete = true }
+                  }
+                  Button { focusable: true; visible: root.confirmPresetDelete; text: "Cancel"; onClicked: root.confirmPresetDelete = false }
+                }
+              }
 
               // ---- You.
               Column {
