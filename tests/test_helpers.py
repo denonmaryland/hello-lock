@@ -497,6 +497,70 @@ class MenuBackups(unittest.TestCase):
         self.assertNotIn(legacy, regular)
         self.assertTrue(link.is_symlink())
 
+    def legacy_backup(self, stamp="20250101-000000-000000"):
+        legacy = Path(str(self.menu) + ".bak.hello-lock." + stamp)  # as written by 0.4.0/0.5.0
+        legacy.write_text(self.ORIGINAL)
+        legacy.chmod(0o644)
+        return legacy
+
+    def test_upgrade_status_makes_legacy_backups_private(self):
+        legacy = self.legacy_backup()
+        for menu in ("unchanged", "missing", "malformed"):
+            with self.subTest(menu=menu):
+                legacy.chmod(0o644)
+                if menu == "missing":
+                    self.menu.unlink()
+                elif menu == "malformed":
+                    self.menu.write_text("{ not jsonc")
+                before = self.menu.read_text() if self.menu.exists() else None
+                result = self.run_menu("status")
+                self.assertEqual(self.mode(legacy), 0o600, result.stderr)
+                self.assertEqual(self.menu.read_text() if self.menu.exists() else None, before)
+                self.assertEqual(legacy.read_text(), self.ORIGINAL)
+        self.assertEqual(len(self.backups()), 1)  # status never prunes or adds backups
+
+    def test_already_enabled_add_makes_legacy_backups_private(self):
+        self.assertEqual(self.run_menu("add").stdout.strip(), "on")
+        enabled = self.menu.read_text()
+        legacy = self.legacy_backup()
+        count = len(self.backups())
+        result = self.run_menu("add")  # returns early: nothing to edit
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "on"), result.stderr)
+        self.assertEqual(self.mode(legacy), 0o600)
+        self.assertEqual(self.menu.read_text(), enabled)
+        self.assertEqual(len(self.backups()), count)
+
+    def test_secure_only_touches_our_own_regular_backups(self):
+        victim = self.home / "victim"
+        victim.write_text("unrelated")
+        victim.chmod(0o644)
+        prefix = str(self.menu) + ".bak.hello-lock."
+        link = Path(prefix + "00000000-000000-000000")
+        link.symlink_to(victim)
+        legacy = self.legacy_backup()
+        result = self.run_menu("secure")
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "done"), result.stderr)
+        self.assertEqual(self.mode(legacy), 0o600)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual((victim.read_text(), self.mode(victim)), ("unrelated", 0o644))
+        self.assertEqual(self.menu.read_text(), self.ORIGINAL)
+
+    def test_service_secures_backups_on_load(self):
+        service = (ROOT / "Service.qml").read_text()
+        self.assertRegex(service, r'id: menuBackupsProc\n    running: true\n'
+                                  r'    command: \[root\.pluginDir \+ "/bin/hello-menu", "secure"\]')
+
+    def test_doctor_reports_readable_backups(self):
+        legacy = self.legacy_backup()
+        result = subprocess.run([str(ROOT / "bin" / "hello-lock-doctor")], env=dict(self.env, NO_COLOR="1"),
+                                capture_output=True, text=True, timeout=60)
+        self.assertIn("1 Omarchy menu backup(s) readable by other users", result.stdout)
+        self.assertEqual(self.mode(legacy), 0o644)  # the doctor stays read-only
+        self.run_menu("secure")
+        result = subprocess.run([str(ROOT / "bin" / "hello-lock-doctor")], env=dict(self.env, NO_COLOR="1"),
+                                capture_output=True, text=True, timeout=60)
+        self.assertNotIn("menu backup(s) readable", result.stdout)
+
     def test_add_remove_and_rollback_from_backup(self):
         self.assertEqual(self.run_menu("add").stdout.strip(), "on")
         self.assertEqual(self.run_menu("status").stdout.strip(), "on")

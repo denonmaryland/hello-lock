@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.3
+
+- Omarchy menu backups made by 0.5.0 and earlier, which could be readable by other local users, are now made private (0600) as soon as Hello Lock loads, without waiting for a menu change. 0.5.1 only fixed them on the next actual edit, so an already-enabled menu entry kept a readable backup even after you opened Settings (found in marketplace review). Every `bin/hello-menu` command, `status` included, now does this first, and the new `bin/hello-menu secure` does only that. As before, only regular files you own are touched, never through a symlink. `hello-lock-doctor` warns about any that are still readable.
+
 ## 0.5.2
 
 - The CRT power-down no longer disappears when `$XDG_RUNTIME_DIR` is traverse-only for your group (mode 710 or 711, as some setups leave `/run/user/<uid>`). `bin/hello-snapshot` used to require exactly 700 and silently skipped the effect otherwise. It now refuses only a runtime directory that other users can read or write; each capture still goes in its own mode-700 directory with mode-600 files. `hello-lock-doctor` warns on the same condition.

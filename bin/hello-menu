@@ -4,6 +4,7 @@
 Usage: hello-menu status   print on, off, other or unreadable
        hello-menu add      add the entry (prints on)
        hello-menu remove   remove Hello Lock's entry (prints off)
+       hello-menu secure   only make existing backups private (prints done)
 
 The entry lives in the user's ~/.config/omarchy/extensions/omarchy-menu.jsonc,
 which Omarchy reads alongside its own menu. Only one line is added or removed:
@@ -13,8 +14,9 @@ doesn't check out, the file is left untouched.
 
 Backups are private to you (0600) from the moment they're created, whatever
 the umask or the menu's own mode. A new backup never reuses an existing name or
-follows a symlink, and only regular files you own count as old backups: those
-past the newest few are deleted and the rest are made private.
+follows a symlink, and only regular files you own count as old backups. Every
+command, even status, first makes those private (older versions could leave them
+readable); edits also delete all but the newest few.
 
 "other" means the menu already has a Style > Lock Screen entry that doesn't open
 Hello Lock's settings; it is never changed. The entry hides itself if Hello Lock
@@ -160,10 +162,14 @@ def backup(old):
     return path
 
 
-def tidy_backups():
-    """Keep the newest KEEP_BACKUPS of our own backups, all of them private."""
+def secure_backups():
+    """Make every backup of ours owner-only; return their paths, oldest first.
+
+    Runs on every command, not only edits, so a backup left readable by an older
+    version (0.5.0 and before used the umask) is fixed on upgrade.
+    """
     mine = []
-    for path in sorted(glob.glob(MENU + ".bak.hello-lock.*")):
+    for path in sorted(glob.glob(glob.escape(MENU) + ".bak.hello-lock.*")):
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
         except OSError:
@@ -174,10 +180,15 @@ def tidy_backups():
                 continue
             mine.append(path)
             if st.st_mode & 0o077:
-                os.fchmod(fd, 0o600)  # e.g. one left readable by an older version
+                os.fchmod(fd, 0o600)
         finally:
             os.close(fd)
-    for extra in mine[:-KEEP_BACKUPS]:
+    return mine
+
+
+def tidy_backups():
+    """Keep the newest KEEP_BACKUPS of our own backups, all of them private."""
+    for extra in secure_backups()[:-KEEP_BACKUPS]:
         os.remove(extra)
 
 
@@ -272,9 +283,19 @@ def remove():
 
 
 def main(argv):
-    if len(argv) != 2 or argv[1] not in ("status", "add", "remove"):
+    if len(argv) != 2 or argv[1] not in ("status", "add", "remove", "secure"):
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
+    try:
+        secure_backups()
+    except OSError as e:
+        print("hello-menu: couldn't make the menu backups private (%s)" % e, file=sys.stderr)
+        if argv[1] == "secure":
+            return 4
+        # Still answer status/add/remove; edits retry this and fail if it still fails.
+    if argv[1] == "secure":
+        print("done")
+        return 0
     try:
         if argv[1] == "status":
             text = read()

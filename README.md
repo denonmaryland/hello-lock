@@ -72,7 +72,7 @@ Every option is on one page, grouped in a sidebar: **You** (name, birthday, the 
 
 A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows as **Custom**. If you try a built-in symbol, you can switch back to Custom until you close the window.
 
-**Style → Lock Screen** is added by the setup if you leave its box ticked, and **Settings → Lock screen → Show in the Omarchy menu** turns it on or off any time. It is one line in your own `~/.config/omarchy/extensions/omarchy-menu.jsonc`: Hello Lock keeps everything else in that file, saves a backup before each change, and leaves the file alone if it can't read it or if you already have your own **Style → Lock Screen** entry. The line hides itself when Hello Lock isn't installed. From a terminal: `bin/hello-menu status`, `add` or `remove` in the plugin folder.
+**Style → Lock Screen** is added by the setup if you leave its box ticked, and **Settings → Lock screen → Show in the Omarchy menu** turns it on or off any time. It is one line in your own `~/.config/omarchy/extensions/omarchy-menu.jsonc`: Hello Lock keeps everything else in that file, saves a private (owner-only) backup before each change, and leaves the file alone if it can't read it or if you already have your own **Style → Lock Screen** entry. The line hides itself when Hello Lock isn't installed. From a terminal: `bin/hello-menu status`, `add` or `remove` in the plugin folder; `bin/hello-menu secure` only makes existing backups private.
 
 ## Brand presets
 

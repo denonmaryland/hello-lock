@@ -21,6 +21,7 @@ import os
 import pwd
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -802,7 +803,22 @@ def check_leftovers(shell_state):
             "They're screenshots of your desktop from the last lock: " + ", ".join(found)
             + ". Hello Lock deletes them on unlock; a crash can leave them.",
             "rm -f " + " ".join("'%s'" % f for f in found))
-    state_dir = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state"),
+    menu = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"),
+                        "omarchy", "extensions", "omarchy-menu.jsonc")
+    readable = []
+    for path in sorted(glob.glob(glob.escape(menu) + ".bak.hello-lock.*")):
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and st.st_mode & 0o077:
+            readable.append(path)
+    if readable:
+        add(S, WARN, "%d Omarchy menu backup(s) readable by other users" % len(readable),
+            "Older Hello Lock versions saved them with your umask: " + ", ".join(tilde(p) for p in readable)
+            + ". The service makes them private when it loads.",
+            os.path.join(OWN_DIR, "bin", "hello-menu") + " secure")
+    state_dir =os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state"),
                              "hello-lock")
     done = os.path.join(state_dir, "onboarded")
     if os.path.exists(done):

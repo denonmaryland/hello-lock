@@ -1084,6 +1084,14 @@ Item {
     command: [root.pluginDir + "/bin/hello-config", "done"]
   }
 
+  // Once per load: make menu backups left readable by 0.5.0 and older private,
+  // even if Settings is never opened. Never touches the menu itself.
+  Process {
+    id: menuBackupsProc
+    running: true
+    command: [root.pluginDir + "/bin/hello-menu", "secure"]
+  }
+
   // After saving, wait for config.json to reload, then play the unlock as a demo.
   Timer {
     id: tryUnlockTimer
