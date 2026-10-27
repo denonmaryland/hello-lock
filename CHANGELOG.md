@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2
+
+- The CRT power-down no longer disappears when `$XDG_RUNTIME_DIR` is traverse-only for your group (mode 710 or 711, as some setups leave `/run/user/<uid>`). `bin/hello-snapshot` used to require exactly 700 and silently skipped the effect otherwise. It now refuses only a runtime directory that other users can read or write; each capture still goes in its own mode-700 directory with mode-600 files. `hello-lock-doctor` warns on the same condition.
+
 ## 0.5.1
 
 - `bin/hello-menu` backups of `~/.config/omarchy/extensions/omarchy-menu.jsonc` are private (0600) from the moment they're created. Before, they took the umask's mode, so a private menu could get a backup other local users could read (found in marketplace review). New backups never overwrite an existing file or follow a symlink, older Hello Lock backups are made private on the next change, and a failed write leaves the menu as it was with no temporary file behind.

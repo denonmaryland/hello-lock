@@ -785,8 +785,8 @@ def check_leftovers(shell_state):
     if runtime != "/tmp":
         try:
             st = os.stat(runtime)
-            if st.st_mode & 0o077:
-                add(S, WARN, "%s is readable by other users (mode %o)" % (runtime, st.st_mode & 0o777),
+            if st.st_mode & 0o066:
+                add(S, WARN, "%s is readable or writable by other users (mode %o)" % (runtime, st.st_mode & 0o777),
                     "Power-down captures are skipped until it is private.", "chmod 700 %s" % runtime)
         except OSError:
             pass

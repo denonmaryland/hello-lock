@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -253,6 +254,26 @@ class Snapshots(unittest.TestCase):
         self.runtime.chmod(0o755)
         with self.assertRaises(ValueError):
             self.helper.runtime_dir()
+
+    def test_group_readable_or_writable_runtime_is_rejected(self):
+        for mode in (0o750, 0o730, 0o704, 0o702):
+            self.runtime.chmod(mode)
+            with self.subTest(mode=oct(mode)), self.assertRaises(ValueError):
+                self.helper.runtime_dir()
+
+    def test_traverse_only_runtime_is_accepted(self):
+        for mode in (0o700, 0o710, 0o711):
+            self.runtime.chmod(mode)
+            with self.subTest(mode=oct(mode)):
+                self.assertEqual(self.helper.runtime_dir(), self.runtime)
+        self.runtime.chmod(0o710)
+        with mock.patch.object(self.helper.subprocess, "run"):
+            result = self.helper.capture(["eDP-1"], self.runtime)
+        directory = Path(result["directory"])
+        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(Path(result["files"]["eDP-1"]).stat().st_mode), 0o600)
+        self.helper.clean(result["directory"], self.runtime)
+        self.runtime.chmod(0o700)
 
     def test_symlink_runtime_is_rejected(self):
         link = self.runtime / "link"
