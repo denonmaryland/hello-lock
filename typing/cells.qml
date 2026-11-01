@@ -54,8 +54,10 @@ Item {
   // Submitted: hold full charge until the verdict arrives.
   property bool chargeHold: false
   readonly property real seed: Math.floor(Math.random() * 4294967296)
+  // Retargeted per keystroke: the Behavior restarts from the current value,
+  // so fast typing never queues and never lags behind the field.
   property real chargeLevel: chargeActive ? lit / total : 1
-  Behavior on chargeLevel { NumberAnimation { id: levelAnimation; duration: 260; easing.type: Easing.OutCubic } }
+  Behavior on chargeLevel { NumberAnimation { id: levelAnimation; duration: 200; easing.type: Easing.OutCubic } }
   // The accent pushed to a vivid, mid-light tone so the flash reads even
   // when a theme's accent sits close to its foreground.
   readonly property color flashColor: accent.hslHue < 0
@@ -99,8 +101,8 @@ Item {
         dx: ((c.x + cs / 2 - cx) / cx) * cs * 0.9 + (r1 - 0.5) * cs * 0.9,
         dy: -(0.15 + r2 * 0.55) * cs,
         g: (1.4 + r3 * 1.8) * cs,
-        rot: (Math.random() - 0.5) * 80,
-        d: Math.random() * 0.22
+        rot: (Math.random() - 0.5) * 48,
+        d: Math.random() * 0.18
       })
     }
     scatterPieces = pieces
@@ -140,7 +142,7 @@ Item {
     snap = !!snapNow
     stamp = Date.now()
     now = stamp
-    busyUntil = Math.max(busyUntil, stamp + spanMs + 420)
+    busyUntil = Math.max(busyUntil, stamp + spanMs + cellSettleMs)
     lit = n
     snap = false
   }
@@ -271,7 +273,8 @@ Item {
     property: "scatterT"
     from: 0
     to: 1
-    duration: 760
+    // Failure token (~0.55 s): long enough to read, short enough to retype.
+    duration: 560
     onFinished: root.scatterPieces = []
   }
 
@@ -281,7 +284,7 @@ Item {
     property: "glowKick"
     from: 0.14
     to: 0
-    duration: 380
+    duration: 280
     easing.type: Easing.OutCubic
   }
 
@@ -290,6 +293,16 @@ Item {
     NumberAnimation { target: root; property: "failTint"; to: 1; duration: 50; easing.type: Easing.OutQuad }
     PauseAnimation { duration: 220 }
     NumberAnimation { target: root; property: "failTint"; to: 0; duration: 180; easing.type: Easing.InOutQuad }
+  }
+
+  // Longest a cell takes to settle after its start (flash decay).
+  readonly property int cellSettleMs: 300
+  // Damped spring for a cell's pop, 0 -> 1 with one small overshoot
+  // (damping 0.5: peaks ~16 % of the travel, settled in ~180 ms).
+  function popSpring(ms) {
+    var z = 0.5, w = 0.044, t = Math.max(0, ms)
+    var wd = w * Math.sqrt(1 - z * z)
+    return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + z * w / wd * Math.sin(wd * t))
   }
 
   // Full-brightness logo with the same drop shadow as the host's plain logo;
@@ -367,23 +380,22 @@ Item {
         width: root.cellSize
         height: root.cellSize
         color: "white"
-        // Lighting: ~90 ms ease in with a 0.45 → 1.14 → 1 pop. Dimming:
-        // a 200 ms ease out with a slight shrink. Reduced motion: opacity.
+        // Lighting: a 90 ms ease-out with a spring pop from 0.72 that peaks
+        // near 1.04. Dimming: a 150 ms ease-in with a slight shrink, faster
+        // than lighting. Reduced motion: 200 ms opacity fades only.
         opacity: {
           if (t < 0) return fromOpacity
-          var p = Math.min(1, t / (calm ? 160 : (on ? 90 : 200)))
-          if (on) return fromOpacity + (1 - fromOpacity) * (calm ? p : 1 - Math.pow(1 - p, 3))
-          return fromOpacity * (1 - (calm ? p : p * p * (3 - 2 * p)))
+          var p = Math.min(1, t / (calm ? 200 : (on ? 90 : 150)))
+          if (on) return fromOpacity + (1 - fromOpacity) * (calm ? 1 - (1 - p) * (1 - p) : 1 - Math.pow(1 - p, 3))
+          return fromOpacity * (1 - p * p)
         }
         scale: {
           if (calm || t < 0) return 1
-          if (!on) return 1 - 0.18 * Math.min(1, t / 200)
-          if (fromOpacity > 0.5) return 1
-          if (t < 110) return 0.45 + 0.69 * (1 - Math.pow(1 - t / 110, 3))
-          if (t < 260) return 1.14 - 0.14 * (0.5 - 0.5 * Math.cos(Math.PI * (t - 110) / 150))
-          return 1
+          if (!on) { var q = Math.min(1, t / 150); return 1 - 0.1 * q * q }
+          if (fromOpacity > 0.5 || t > 260) return 1
+          return 0.72 + 0.28 * root.popSpring(t)
         }
-        readonly property real flash: (calm || !on || t < 0 || fromOpacity > 0.5) ? 0 : Math.pow(1 - Math.min(1, t / 420), 2)
+        readonly property real flash: (calm || !on || t < 0 || fromOpacity > 0.5) ? 0 : Math.pow(1 - Math.min(1, t / root.cellSettleMs), 2)
 
         function restate(snapNow) {
           if (snapNow) {
@@ -477,7 +489,7 @@ Item {
       width: root.cellSize
       height: root.cellSize
       rotation: modelData.rot * ease
-      scale: 1 - 0.3 * p
+      scale: 1 - 0.15 * p
       opacity: 1 - p * p
       antialiasing: true
     }

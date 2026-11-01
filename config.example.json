@@ -10,5 +10,7 @@
   "weather": true,
   "powerDown": true,
   "legendary": true,
+  "greeting": true,
+  "unlockBackdrop": true,
   "clock": true
 }

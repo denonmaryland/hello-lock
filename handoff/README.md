@@ -41,10 +41,32 @@ The transition exposes, and the host applies to the symbol:
 These are layered on top of whatever the unlock animation does to the symbol.
 
 Provided by `HandoffEffect`: `t` (a 0..1 progress to animate), `active`, `busy`,
-`cx`/`cy` (logo centre), `prand(i, k)`, `clamp01`, `easeOut`, and the
-`resetting()` signal for putting a transition's own state back. `Piece` draws a
-rectangle of the logo (`px`, `py`, `pw`, `ph`, in texture pixels; the whole
-logo by default) where it sits at rest; move, scale, turn or fade it.
+`cx`/`cy` (logo centre), `prand(i, k)`, `clamp01`, the shared timing below, and
+the `resetting()` signal for putting a transition's own state back. `Piece`
+draws a rectangle of the logo (`px`, `py`, `pw`, `ph`, in texture pixels; the
+whole logo by default) where it sits at rest; move, scale, turn or fade it.
+
+Shared timing, so the transitions feel like one family:
+
+| Token | Use |
+|---|---|
+| `exitCurve`, `exitDuration` (620 ms) | The logo leaving: it gathers speed (ease-in), but with a little initial velocity so it is moving on the first frame. |
+| `moveCurve`, `fadeDuration` (520 ms) | The logo's fade, and neutral sweeps (ease-in-out). |
+| `emergeCurve`, `emergeDuration` (760 ms) | The symbol arriving: fast, then a long gentle settle (ease-out). |
+
+The curves are cubic béziers for `easing.type: Easing.BezierSpline` with
+`easing.bezierCurve: root.exitCurve` and so on. Pieces driven from `t` use the
+same curves through `ease(curve, x)`, or `easeIn(x)`, `easeOut(x)` and
+`easeInOut(x)` (all clamp `x` to 0..1). When `t` drives several pieces, animate
+it linearly as a clock and let each piece ease its own share of it.
+
+Choreography: let the symbol's entrance overlap the logo's exit rather than
+follow it, keep deformation subtle unless it's the idea (a fly-through or a
+CRT collapse), keep staggers under about 50 ms a piece, and use overshoot
+sparingly (one small, quickly settled bounce at most). Where the logo and the
+symbol share one motion, as in `flip`, drive both from one property so the
+speed carries across the seam. Glows and lines that appear mid-play should
+fade in, not pop, and fade out with a fast exponential decay.
 
 Rules:
 - Start at the rest pose and be moving on the first frame. The hand-over must

@@ -37,11 +37,12 @@ Item {
   property real ghostTop: 0
   property real ghostBottom: 0
   property real ghost: 0
-  // Failure timeline, 0..1 over failDuration.
+  // Failure timeline, 0..1 over failDuration. The keyframes below are in
+  // nominal ms of a 1000 ms roll, played in 700 ms (the failure token).
   property bool failing: false
   property real failT: 0
-  readonly property int failDuration: 1000
-  readonly property real failMs: failT * failDuration
+  readonly property int failDuration: 700
+  readonly property real failMs: failT * 1000
 
   readonly property real inkTop: inkRect.y
   readonly property real inkH: inkRect.height
@@ -64,7 +65,8 @@ Item {
 
   function submit() {
     if (failing) stopFail()
-    moveTo(1, 250, Easing.InOutQuad)
+    // Enter answers at once: an ease-out race to the bottom.
+    moveTo(1, 250, Easing.OutCubic)
   }
 
   function fail() {
@@ -114,7 +116,7 @@ Item {
     coolAnim.to = target
     // Going down the phosphor settles slowly behind the beam; going up the
     // settled edge simply follows it.
-    coolAnim.duration = down ? 820 : ms
+    coolAnim.duration = down ? 700 : ms
     coolAnim.easing.type = down ? Easing.InOutSine : easing
     coolAnim.start()
     if (down) {
@@ -159,7 +161,8 @@ Item {
 
   NumberAnimation { id: edgeAnim; target: root; property: "edge" }
   NumberAnimation { id: coolAnim; target: root; property: "cool" }
-  NumberAnimation { id: heatAnim; target: root; property: "heat"; to: 0; duration: 900; easing.type: Easing.InQuad }
+  // Phosphor decays like light does: bright, then a fast fall and a tail.
+  NumberAnimation { id: heatAnim; target: root; property: "heat"; to: 0; duration: 700; easing.type: Easing.OutQuad }
   NumberAnimation { id: ghostAnim; target: root; property: "ghost"; from: 1; to: 0; duration: 300; easing.type: Easing.OutQuad }
   SequentialAnimation {
     id: beamAnim
@@ -167,7 +170,7 @@ Item {
     property int hold: 190
     NumberAnimation { target: root; property: "beam"; to: beamAnim.peak; duration: 60; easing.type: Easing.OutQuad }
     PauseAnimation { duration: Math.max(0, beamAnim.hold - 60) }
-    NumberAnimation { target: root; property: "beam"; to: 0; duration: 420; easing.type: Easing.InQuad }
+    NumberAnimation { target: root; property: "beam"; to: 0; duration: 300; easing.type: Easing.InQuad }
   }
   NumberAnimation {
     id: failAnim

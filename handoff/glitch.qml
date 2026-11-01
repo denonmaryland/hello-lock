@@ -1,7 +1,8 @@
 import QtQuick
 
 // Glitch out: the logo splits into colour ghosts, jitters and tears into
-// slices, flickers and cuts away; the symbol snaps in.
+// slices, drops out in hard flicker cuts and is gone; the symbol snaps in
+// under the flicker.
 HandoffEffect {
   id: root
   property real fade: 1
@@ -10,7 +11,7 @@ HandoffEffect {
   property var offsets: [0, 0, 0, 0, 0]
   onResetting: { fade = 1; tear = 0; jitter = 0; offsets = [0, 0, 0, 0, 0] }
 
-  readonly property real amp: sourceRect.height * 0.12
+  readonly property real amp: sourceRect.height * 0.1
 
   Timer {
     interval: 45
@@ -29,7 +30,7 @@ HandoffEffect {
     effect: root
     colorization: 1
     colorizationColor: root.alertColor
-    opacity: root.fade * 0.6 * root.jitter
+    opacity: root.fade * 0.5 * root.jitter
     transform: Translate { x: -root.amp * (0.4 + 0.6 * Math.abs(root.offsets[0])) * root.jitter }
   }
 
@@ -37,7 +38,7 @@ HandoffEffect {
     effect: root
     colorization: 1
     colorizationColor: root.accent
-    opacity: root.fade * 0.5 * root.jitter
+    opacity: root.fade * 0.4 * root.jitter
     transform: Translate { x: root.amp * (0.4 + 0.6 * Math.abs(root.offsets[1])) * root.jitter }
   }
 
@@ -59,7 +60,7 @@ HandoffEffect {
       py: band
       ph: Math.round(root.sourceRect.height * 0.12)
       opacity: root.fade * root.tear
-      transform: Translate { x: root.amp * 2.2 * root.offsets[slice.index + 2] * root.tear }
+      transform: Translate { x: root.amp * 1.8 * root.offsets[slice.index + 2] * root.tear }
     }
   }
 
@@ -69,18 +70,24 @@ HandoffEffect {
       PauseAnimation { duration: 140 }
       NumberAnimation { target: root; property: "tear"; from: 0; to: 1; duration: 160; easing.type: Easing.OutQuad }
     }
+    // Hard cuts, as a failing signal drops out, then a fast decay.
     SequentialAnimation {
       PauseAnimation { duration: 260 }
-      NumberAnimation { target: root; property: "fade"; to: 0.3; duration: 50 }
-      NumberAnimation { target: root; property: "fade"; to: 0.9; duration: 40 }
-      NumberAnimation { target: root; property: "fade"; to: 0.15; duration: 60 }
-      NumberAnimation { target: root; property: "fade"; to: 0.6; duration: 40 }
-      NumberAnimation { target: root; property: "fade"; to: 0; duration: 90 }
+      PropertyAction { target: root; property: "fade"; value: 0.3 }
+      PauseAnimation { duration: 50 }
+      PropertyAction { target: root; property: "fade"; value: 0.85 }
+      PauseAnimation { duration: 40 }
+      PropertyAction { target: root; property: "fade"; value: 0.15 }
+      PauseAnimation { duration: 60 }
+      PropertyAction { target: root; property: "fade"; value: 0.55 }
+      PauseAnimation { duration: 40 }
+      NumberAnimation { target: root; property: "fade"; to: 0; duration: 90; easing.type: Easing.OutExpo }
     }
+    // Snaps in under the flicker with one small, quickly settled overshoot.
     SequentialAnimation {
-      PropertyAction { target: root; property: "emergeScale"; value: 0.86 }
-      PauseAnimation { duration: 280 }
-      NumberAnimation { target: root; property: "emergeScale"; from: 0.86; to: 1; duration: 380; easing.type: Easing.OutBack; easing.overshoot: 1.8 }
+      PropertyAction { target: root; property: "emergeScale"; value: 0.88 }
+      PauseAnimation { duration: 240 }
+      NumberAnimation { target: root; property: "emergeScale"; from: 0.88; to: 1; duration: 420; easing.type: Easing.OutBack; easing.overshoot: 1.1 }
     }
   }
 }

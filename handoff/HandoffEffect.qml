@@ -58,6 +58,35 @@ Item {
     return x - Math.floor(x)
   }
 
+  // Shared timing, so every transition hands over with the same feel. The
+  // logo leaves on exitCurve (gathering speed, yet moving from the first
+  // frame) over exitDuration and fades over fadeDuration on moveCurve; the
+  // symbol arrives on emergeCurve (fast, then a long gentle settle) over
+  // emergeDuration. moveCurve also suits neutral sweeps. Cubic béziers as
+  // Easing.BezierSpline takes them (easing.bezierCurve).
+  readonly property var exitCurve: [0.4, 0.1, 0.85, 0.4, 1, 1]
+  readonly property var emergeCurve: [0.2, 0.6, 0.35, 1, 1, 1]
+  readonly property var moveCurve: [0.42, 0.12, 0.4, 1, 1, 1]
+  readonly property int exitDuration: 620
+  readonly property int fadeDuration: 520
+  readonly property int emergeDuration: 760
+
   function clamp01(x) { return Math.max(0, Math.min(1, x)) }
-  function easeOut(x) { var p = clamp01(x); return 1 - Math.pow(1 - p, 3) }
+
+  // One of the curves above at progress x (clamped), for pieces driven from t.
+  function ease(curve, x) {
+    var p = clamp01(x)
+    if (p <= 0 || p >= 1) return p
+    // x(s) rises monotonically, so bisect for s, then read y(s).
+    var lo = 0, hi = 1, s = p
+    for (var i = 0; i < 20; i++) {
+      s = (lo + hi) / 2
+      var bx = 3 * (1 - s) * (1 - s) * s * curve[0] + 3 * (1 - s) * s * s * curve[2] + s * s * s
+      if (bx < p) lo = s; else hi = s
+    }
+    return 3 * (1 - s) * (1 - s) * s * curve[1] + 3 * (1 - s) * s * s * curve[3] + s * s * s
+  }
+  function easeIn(x) { return ease(exitCurve, x) }
+  function easeOut(x) { return ease(emergeCurve, x) }
+  function easeInOut(x) { return ease(moveCurve, x) }
 }

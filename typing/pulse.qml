@@ -4,9 +4,12 @@ import QtQuick.Shapes
 
 // Pulse: no progress, just a heartbeat. The logo stays fully lit; each
 // keystroke sends a soft band of accent light from the ink's centre outward
-// (masked to the logo) with a tiny breath of the ripple light. Backspace pulls a smaller,
-// dimmer ripple inward, submit is one bright full pulse, failure one ripple in
-// the error colour. Reduced motion: a gentle brightness blink, no scale.
+// (masked to the logo). Backspace pulls a smaller, dimmer ripple inward.
+// Keystrokes never scale anything (high-frequency input stays light); only
+// submit (one bright full pulse) and failure (one ripple in the error
+// colour) add a tiny breath of the ripple light. Short ripples keep the pool
+// of four from being recycled mid-flight when typing fast. Reduced motion: a
+// gentle brightness blink, no scale.
 Item {
   id: root
 
@@ -82,30 +85,31 @@ Item {
 
   function keystroke(length, delta) {
     if (delta > 0) {
-      if (reducedMotion) blink(lightAccent, 0.26, 380)
-      else { ripple(0, 1, 0.85, lightAccent, 640); breathe(1.015, 90, 420) }
+      if (reducedMotion) blink(lightAccent, 0.26, 280)
+      else ripple(0, 1, 0.85, lightAccent, 440)
       pulseGlow(0.16)
     } else if (delta === -1) {
-      if (reducedMotion) blink(lightAccent, 0.13, 300)
-      else { ripple(0.7, 0, 0.45, lightAccent, 460); breathe(0.993, 80, 360) }
+      if (reducedMotion) blink(lightAccent, 0.13, 240)
+      else ripple(0.7, 0, 0.45, lightAccent, 360)
       pulseGlow(0.07)
     } else {
       // Clear: one soft inward sweep from the edges.
-      if (reducedMotion) blink(lightAccent, 0.16, 360)
-      else { ripple(1, 0, 0.55, lightAccent, 560); breathe(0.99, 100, 420) }
+      if (reducedMotion) blink(lightAccent, 0.16, 280)
+      else ripple(1, 0, 0.55, lightAccent, 440)
       pulseGlow(0.08)
     }
   }
 
   function submit() {
-    blink(brightAccent, reducedMotion ? 0.5 : 0.62, reducedMotion ? 520 : 640)
-    if (!reducedMotion) { ripple(0, 1.05, 1, brightAccent, 700); breathe(1.022, 110, 520) }
+    blink(brightAccent, reducedMotion ? 0.5 : 0.62, reducedMotion ? 480 : 560)
+    if (!reducedMotion) { ripple(0, 1.05, 1, brightAccent, 600); breathe(1.022, 110, 480) }
     pulseGlow(0.35)
   }
 
+  // Failure token (~0.55 s), alongside the host's glitch and shake.
   function fail() {
-    if (reducedMotion) blink(errorColor, 0.45, 520)
-    else { ripple(0, 1.05, 1, errorColor, 720); breathe(0.985, 90, 480) }
+    if (reducedMotion) blink(errorColor, 0.45, 480)
+    else { ripple(0, 1.05, 1, errorColor, 560); breathe(0.985, 90, 420) }
     pulseGlow(0.12)
   }
 
@@ -302,7 +306,7 @@ Item {
   NumberAnimation {
     id: kickAnimation
     target: root; property: "kick"; to: 0
-    duration: 620; easing.type: Easing.OutCubic
+    duration: 480; easing.type: Easing.OutCubic
   }
 
   SequentialAnimation {

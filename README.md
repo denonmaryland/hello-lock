@@ -141,7 +141,7 @@ Change anything later in one window, with no steps to click through. Open it fro
 omarchy-shell lock settings
 ```
 
-<p align="center"><img src="docs/settings.png" alt="The settings window: a sidebar of sections and the unlock symbol grid" width="720"></p>
+<p align="center"><img src="docs/settings.png" alt="Settings Studio: an icon rail, unlock controls and a live symbol preview" width="720"></p>
 
 An icon rail on the left holds eight sections: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol, the gold unlock, greeting, background and the transition), **Typing**, **Lock screen** (clock, power-down, motion, the menu entry), **Sound** (on/off, typing sound, volume, quiet hours), **Presets** (saved looks and rotation) and **Weather**. Each section's settings sit beside a **live preview** of what they change: the greeting as you type your name, your logo on a miniature lock screen, the unlock symbol and its transition (the real transition file, played in place), the real typing effect driven by pretend keystrokes, the CRT power-down as a storyboard, every sound cue with its waveform (**Play** runs the sound helper once per click), your presets as a carousel, and where the weather appears. The previews draw sample text only, make no network requests, and stop when hidden. The full-screen button and **Preview on the lock screen** still open the real previews. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections. On screens smaller than the window it scales down to fit, and long sections scroll.
 
@@ -151,7 +151,7 @@ A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows a
 
 ## Brand presets
 
-<p align="center"><img src="docs/presets.png" alt="The Presets section: four saved looks and the On each lock choice set to Cycle presets" width="720"></p>
+<p align="center"><img src="docs/presets.png" alt="The Presets section: three saved looks, a live carousel and Cycle presets selected" width="720"></p>
 
 Open `omarchy-shell lock settings` and select **Presets**. Set your brand text in
 **You**, choose a logo in **Logo** and a symbol in **Unlock**, then give the

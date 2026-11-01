@@ -52,6 +52,13 @@ Item {
   property int powerDownToken: 0
   signal powerDownFinished()
 
+  // Motion tokens. Small state changes (field border, status lines, badges)
+  // share one timing: entrances ease out, exits ease in (see StateFade).
+  readonly property int stateMs: 200
+  // Wrong-password shake: a damped oscillation, bounded to a few pixels.
+  readonly property int shakeMs: 320
+  readonly property real shakeAmplitude: 10
+
   readonly property string placeholderText: "Enter Password"
   // Slim frosted pill instead of the stock 381×67 block with a 3px outline.
   readonly property int fieldWidth: 288
@@ -70,11 +77,11 @@ Item {
     : 1
   readonly property bool showPasswordCursor: inputEnabled && !authenticatingPassword && failureMessage.length === 0
   readonly property bool errorState: failureMessage.length > 0
-  // Hairline border: faint foreground at rest, theme accent while typing,
-  // theme error color after a failed attempt.
+  // Hairline border: faint foreground at rest, theme accent while typing and
+  // while the password is being checked, theme error color after a failure.
   readonly property color inputBorderColor: errorState
     ? Commons.Color.lock.borderError
-    : (passwordText.length > 0 ? Util.alpha(Commons.Color.lock.borderActive, 0.85) : Util.alpha(Commons.Color.lock.text, 0.22))
+    : (passwordText.length > 0 || authenticatingPassword ? Util.alpha(Commons.Color.lock.borderActive, 0.85) : Util.alpha(Commons.Color.lock.text, 0.22))
 
   // Idle motion (wallpaper drift + wordmark breathing) only runs while the
   // lock is actually showing something; it pauses during the unlock handoff.
@@ -112,15 +119,20 @@ Item {
     NumberAnimation { from: 1; to: 0; duration: 2500; easing.type: Easing.InOutSine }
   }
 
-  // Lock-entry reveal of the foreground (clock/logo/field), driven by the
-  // power-down sequence; 1/1 at rest.
+  // Lock-entry reveal of the foreground, driven by the power-down sequence;
+  // 1/1 at rest. The logo (revealOpacity) emerges first, where the CRT dot
+  // was; the clock and field (contentReveal) follow a beat later.
   property real revealOpacity: 1
+  property real contentReveal: 1
   property real revealScale: 1
 
-  // Wrong-password glitch state.
+  // Wrong-password glitch state. glitchEnergy decays 1 -> 0 over the glitch,
+  // so the ghosts and slices settle instead of cutting out.
   property bool glitching: false
   property real glitchMix: 0
   property int glitchTick: 0
+  readonly property int glitchTicks: 11
+  property real glitchEnergy: 0
   property real ghostAX: 0
   property real ghostBX: 0
   property var glitchSlices: [
@@ -290,7 +302,9 @@ Item {
   }
 
   function jitterGlitch() {
-    var decay = Math.max(0.25, 1 - glitchTick / 12)
+    // Ease-out envelope: a sharp first hit that settles smoothly to nothing.
+    var decay = Math.pow(1 - glitchTick / glitchTicks, 1.5)
+    glitchEnergy = decay
     var w = wordmark.width
     var h = wordmark.height
     var sign = Math.random() < 0.5 ? -1 : 1
@@ -302,8 +316,8 @@ Item {
       slices.push({
         y: h * (0.12 + Math.random() * 0.7),
         h: sh,
-        dx: (Math.random() < 0.5 ? -1 : 1) * (0.01 + Math.random() * 0.025) * w * decay,
-        on: Math.random() < 0.8
+        dx: (Math.random() < 0.5 ? -1 : 1) * (0.008 + Math.random() * 0.018) * w * decay,
+        on: Math.random() < 0.3 + 0.5 * decay
       })
     }
     glitchSlices = slices
@@ -312,6 +326,7 @@ Item {
   function stopGlitch() {
     glitchTimer.stop()
     glitching = false
+    glitchEnergy = 0
     ghostAX = 0
     ghostBX = 0
   }
@@ -331,11 +346,13 @@ Item {
       return
     }
     revealOpacity = 0
+    contentReveal = 0
     revealScale = reducedMotion ? 1 : 0.98
   }
 
   function finishPowerDown() {
     revealOpacity = 1
+    contentReveal = 1
     revealScale = 1
     // Unload after the current animation tick; the overlay (and the
     // decoded snapshot) only exists while the effect plays.
@@ -410,8 +427,15 @@ Item {
   onInputEnabledChanged: {
     if (inputEnabled) Qt.callLater(forcePasswordFocus)
   }
-  onVisibleChanged: if (visible) refreshClock()
-  onReducedMotionChanged: if (reducedMotion) { shakeAnimation.stop(); inputField.shakeOffset = 0; stopGlitch() }
+  onVisibleChanged: {
+    if (!visible) return
+    // Catch up silently: only minutes turning over in view cross-fade.
+    clockTurn.complete()
+    clockTime.previous = ""
+    refreshClock()
+    clockTime.previous = clockTime.text
+  }
+  onReducedMotionChanged: if (reducedMotion) { shakeAnimation.stop(); inputField.shakeT = 1; stopGlitch() }
   Component.onCompleted: {
     refreshClock()
     syncPasswordText()
@@ -420,6 +444,7 @@ Item {
 
   signal submitPassword(string password)
   signal passwordTextEdited(string password)
+  signal typingSoundRequested()
   signal clearFailureRequested()
   signal wakeRequested()
 
@@ -438,7 +463,7 @@ Item {
     repeat: true
     onTriggered: {
       root.glitchTick += 1
-      if (root.glitchTick >= 11) root.stopGlitch()
+      if (root.glitchTick >= root.glitchTicks) root.stopGlitch()
       else root.jitterGlitch()
     }
   }
@@ -508,18 +533,21 @@ Item {
     }
 
     // Foreground: clock and field (the logo is in logoLayer below). Fades
-    // out for the unlock handoff; the inner item is driven by the power-down
-    // reveal.
+    // out for the unlock handoff (an exit: eases in, gone well inside the
+    // 360 ms release gate); the inner item is driven by the power-down reveal.
     Item {
       id: unlockFade
       anchors.fill: parent
       opacity: root.unlocking ? 0 : 1
-      Behavior on opacity { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+      Behavior on opacity {
+        id: unlockFadeBehavior
+        NumberAnimation { duration: 220; easing.type: unlockFadeBehavior.targetValue > 0 ? Easing.OutCubic : Easing.InQuad }
+      }
 
       Item {
         id: content
         anchors.fill: parent
-        opacity: root.revealOpacity
+        opacity: root.contentReveal
         scale: root.revealScale
 
         // macOS-style clock, centered around 15% of the screen height —
@@ -540,16 +568,54 @@ Item {
           }
 
           Text {
+            id: clockTime
             anchors.horizontalCenter: parent.horizontalCenter
             textFormat: Text.PlainText
             text: root.timeString
-            color: Commons.Color.lock.text
+            // Alpha, not opacity, carries the cross-fade: opacity would also
+            // fade the outgoing copy, which is a child.
+            color: Qt.rgba(Commons.Color.lock.text.r, Commons.Color.lock.text.g, Commons.Color.lock.text.b,
+                           Commons.Color.lock.text.a * incoming)
             font.family: "Oxanium"
             font.weight: Font.Light
             font.variableAxes: ({ "wght": 270 })
             font.pixelSize: root.clockFontSize
             font.letterSpacing: root.clockFontSize * 0.01
             renderType: Text.QtRendering
+
+            // A new minute cross-fades in over the old one (a fade, so reduced
+            // motion keeps it). Only while the lock shows; the time set when
+            // the lock appears is instant.
+            property string previous: ""
+            property real incoming: 1
+            Text {
+              id: clockOutgoing
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              color: Commons.Color.lock.text
+              font: clockTime.font
+              renderType: Text.QtRendering
+              opacity: 0
+              visible: opacity > 0
+            }
+            onTextChanged: {
+              if (previous && root.visible && !root.unlocking) {
+                clockOutgoing.text = previous
+                clockTurn.restart()
+              }
+              previous = clockTime.text
+            }
+            // Staggered so the two times barely overlap (overlapping digits at
+            // half strength read as a smudge): out first, in 80 ms later.
+            ParallelAnimation {
+              id: clockTurn
+              NumberAnimation { target: clockOutgoing; property: "opacity"; from: 1; to: 0; duration: 160; easing.type: Easing.InOutQuad }
+              SequentialAnimation {
+                PropertyAction { target: clockTime; property: "incoming"; value: 0 }
+                PauseAnimation { duration: 80 }
+                NumberAnimation { target: clockTime; property: "incoming"; to: 1; duration: 220; easing.type: Easing.OutCubic }
+              }
+            }
           }
 
           Text {
@@ -572,7 +638,12 @@ Item {
           readonly property int borderRight: border.width
           readonly property int borderBottom: border.width
           readonly property int borderLeft: border.width
-          property real shakeOffset: 0
+          // Failure shake: shakeT runs 0 -> 1 and shapes a damped sine (two
+          // and a half swings under a quadratic envelope) that leaves first
+          // and comes to rest with no velocity. 1 = at rest.
+          property real shakeT: 1
+          readonly property real shakeOffset: shakeT >= 1 ? 0
+            : -root.shakeAmplitude * Math.pow(1 - shakeT, 2) * Math.sin(shakeT * 5 * Math.PI)
           width: root.fieldWidth
           height: root.fieldHeight
           // Rests in the lower part of the screen, apart from the logo.
@@ -586,15 +657,17 @@ Item {
           radius: height / 2
           clip: true
 
-          Behavior on border.color { ColorAnimation { duration: 180; easing.type: Easing.OutCubic } }
+          Behavior on border.color { ColorAnimation { duration: root.stateMs; easing.type: Easing.OutCubic } }
 
-          SequentialAnimation {
+          // Linear on purpose: shakeT is the clock of the oscillation above,
+          // which carries its own easing.
+          NumberAnimation {
             id: shakeAnimation
-            NumberAnimation { target: inputField; property: "shakeOffset"; to: -10; duration: 50; easing.type: Easing.OutQuad }
-            NumberAnimation { target: inputField; property: "shakeOffset"; to: 8; duration: 70; easing.type: Easing.InOutQuad }
-            NumberAnimation { target: inputField; property: "shakeOffset"; to: -5; duration: 60; easing.type: Easing.InOutQuad }
-            NumberAnimation { target: inputField; property: "shakeOffset"; to: 2; duration: 50; easing.type: Easing.InOutQuad }
-            NumberAnimation { target: inputField; property: "shakeOffset"; to: 0; duration: 40; easing.type: Easing.OutQuad }
+            target: inputField
+            property: "shakeT"
+            from: 0
+            to: 1
+            duration: root.shakeMs
           }
 
           TextInput {
@@ -628,6 +701,13 @@ Item {
               visible: passwordInput.cursorVisible
             }
 
+            // User edits only: mirrored text on other screens, submission and
+            // programmatic clears never produce duplicate typing sounds.
+            onTextEdited: {
+              if (!root.syncingPasswordText && root.inputEnabled && !root.authenticatingPassword && !root.unlocking)
+                root.typingSoundRequested()
+            }
+
             onTextChanged: {
               if (!root.syncingPasswordText) root.passwordTextEdited(text)
               if (text.length > 0) {
@@ -658,6 +738,17 @@ Item {
             anchors.fill: passwordInput
             text: root.authenticatingPassword ? "Checking…" : (root.failureMessage.length > 0 ? root.failureMessage : root.placeholderText)
             visible: passwordInput.text.length === 0
+            // "Checking…" breathes slowly while PAM works (a wrong password can
+            // take seconds), so the wait reads as alive. Starts at full, so a
+            // quick verdict never shows it dim; still with reduced motion.
+            property real checkingPulse: 0
+            opacity: root.authenticatingPassword ? 1 - 0.45 * checkingPulse : 1
+            SequentialAnimation on checkingPulse {
+              running: root.authenticatingPassword && !root.reducedMotion && root.visible
+              loops: Animation.Infinite
+              NumberAnimation { from: 0; to: 1; duration: 800; easing.type: Easing.InOutSine }
+              NumberAnimation { from: 1; to: 0; duration: 800; easing.type: Easing.InOutSine }
+            }
             color: root.authenticatingPassword ? Commons.Color.lock.text : (root.failureMessage.length > 0 ? Commons.Color.lock.textError : Commons.Color.lock.placeholder)
             font.family: Style.font.family
             font.pixelSize: root.fieldFontSize
@@ -688,6 +779,7 @@ Item {
 
         // Keystroke pulse: a faint accent outline that grows out of the field
         // and fades. Sibling of the field (which clips) and purely visual.
+        // Kept quiet: the logo's typing effect is the focal point.
         Rectangle {
           id: pulseRing
           property real spread: 0
@@ -703,8 +795,8 @@ Item {
 
           ParallelAnimation {
             id: pulseAnimation
-            NumberAnimation { target: pulseRing; property: "spread"; from: 0; to: 10; duration: 350; easing.type: Easing.OutCubic }
-            NumberAnimation { target: pulseRing; property: "opacity"; from: 0.5; to: 0; duration: 350; easing.type: Easing.OutQuad }
+            NumberAnimation { target: pulseRing; property: "spread"; from: 0; to: 8; duration: 320; easing.type: Easing.OutCubic }
+            NumberAnimation { target: pulseRing; property: "opacity"; from: 0.38; to: 0; duration: 320; easing.type: Easing.OutCubic }
           }
         }
 
@@ -722,7 +814,7 @@ Item {
           font.letterSpacing: root.dateFontSize * 0.12
           opacity: root.capsLock && root.watchKeyboard ? 1 : 0
           visible: opacity > 0
-          Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+          StateFade on opacity {}
         }
 
         // Wrong password: a terminal-style status line under the field, typed
@@ -742,7 +834,7 @@ Item {
           leftPadding: root.dateFontSize * 0.35
           opacity: root.errorState && root.failedAttempts > 0 && !root.unlocking ? 1 : 0
           visible: opacity > 0
-          Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+          StateFade on opacity {}
         }
 
         Text {
@@ -758,7 +850,7 @@ Item {
           font.pixelSize: Math.round(root.dateFontSize * 1.05)
           opacity: root.failureHint.length > 0 && !root.unlocking ? 1 : 0
           visible: opacity > 0
-          Behavior on opacity { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+          StateFade on opacity {}
           Connections {
             target: root
             function onFailureHintChanged() { if (root.failureHint.length > 0) failureHintText.shown = root.failureHint }
@@ -867,12 +959,13 @@ Item {
         blurMultiplier: 0.6
       }
 
-      // Glitch RGB-split ghosts (only rendered during a failed attempt).
+      // Glitch RGB-split ghosts (only rendered during a failed attempt);
+      // they thin out with the glitch's energy rather than cutting off.
       MultiEffect {
         anchors.fill: wordmark
         source: logoSource
         visible: root.glitching && wordmark.status === Image.Ready
-        opacity: 0.6
+        opacity: 0.6 * (0.35 + 0.65 * root.glitchEnergy)
         colorization: 1
         colorizationColor: root.glitchRed
         transform: Translate { x: root.ghostAX }
@@ -882,7 +975,7 @@ Item {
         anchors.fill: wordmark
         source: logoSource
         visible: root.glitching && wordmark.status === Image.Ready
-        opacity: 0.45
+        opacity: 0.45 * (0.35 + 0.65 * root.glitchEnergy)
         colorization: 1
         colorizationColor: Commons.Color.accent
         transform: Translate { x: root.ghostBX }
@@ -896,7 +989,7 @@ Item {
         autoPaddingEnabled: false
         visible: wordmark.status === Image.Ready
         opacity: root.handoff + (1 - root.handoff) * (root.fxBase + (1 - root.fxBase) * 0.6 * root.glitchMix)
-        Behavior on opacity { enabled: !root.glitching && root.glitchMix === 0 && !root.unlocking; NumberAnimation { duration: 400; easing.type: Easing.OutCubic } }
+        Behavior on opacity { enabled: !root.glitching && root.glitchMix === 0 && !root.unlocking; NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
         // Untinted logos keep their own colours, but still flash red on a glitch.
         colorization: root.tintLogo ? 1 : root.glitchMix
         colorizationColor: root.mixColor(Commons.Color.lock.text, root.glitchRed, root.glitchMix)
@@ -1089,6 +1182,7 @@ Item {
         ParallelAnimation {
           NumberAnimation { target: snapshotFx; property: "opacity"; to: 0; duration: 220; easing.type: Easing.OutCubic }
           NumberAnimation { target: root; property: "revealOpacity"; to: 1; duration: 220; easing.type: Easing.OutCubic }
+          NumberAnimation { target: root; property: "contentReveal"; to: 1; duration: 220; easing.type: Easing.OutCubic }
         }
         ScriptAction { script: { snapshot.source = ""; root.finishPowerDown() } }
       }
@@ -1097,34 +1191,52 @@ Item {
         id: powerDownAnimation
         // Multi-monitor ripple: hold the frozen desktop for this screen's beat.
         PauseAnimation { duration: root.powerDownDelay }
-        // Squash to a bright horizontal line.
+        // Squash to a bright horizontal line. The collapse accelerates (InQuad
+        // reads from the first frame; InCubic sat still for ~100 ms) while the
+        // glow builds late, into the line.
         ParallelAnimation {
-          NumberAnimation { target: powerDownLayer; property: "squashY"; to: 0.006; duration: 260; easing.type: Easing.InCubic }
+          NumberAnimation { target: powerDownLayer; property: "squashY"; to: 0.006; duration: 260; easing.type: Easing.InQuad }
           NumberAnimation { target: powerDownLayer; property: "glow"; to: 0.6; duration: 260; easing.type: Easing.InCubic }
         }
-        // Line collapses to a dot.
+        // Line collapses to a dot. This is the hit the lock cue lands on
+        // (sounds/generate-cues.py), 420 ms in plus the screen's ripple beat.
         ParallelAnimation {
           NumberAnimation { target: powerDownLayer; property: "squashX"; to: 0.004; duration: 160; easing.type: Easing.InCubic }
           NumberAnimation { target: powerDownLayer; property: "tint"; to: 1; duration: 160; easing.type: Easing.InCubic }
           SequentialAnimation {
             PauseAnimation { duration: 90 }
-            NumberAnimation { target: flareDot; property: "opacity"; to: 1; duration: 70 }
+            NumberAnimation { target: flareDot; property: "opacity"; to: 1; duration: 70; easing.type: Easing.OutQuad }
           }
         }
-        // Dot flares and fades.
+        // Dot flares and its afterglow decays; the black starts lifting under
+        // the last of it, so the logo emerges where the dot was rather than
+        // after a beat of empty black. The clock and field follow the logo.
         PropertyAction { target: snapshotFx; property: "opacity"; value: 0 }
         ParallelAnimation {
-          NumberAnimation { target: powerDownLayer; property: "flareScale"; to: 2.4; duration: 150; easing.type: Easing.OutCubic }
-          NumberAnimation { target: flareDot; property: "opacity"; to: 0; duration: 150; easing.type: Easing.InQuad }
-        }
-        // Black lifts to reveal the lock screen.
-        ParallelAnimation {
-          NumberAnimation { target: crtBlack; property: "opacity"; to: 0; duration: 300; easing.type: Easing.OutCubic }
-          NumberAnimation { target: root; property: "revealOpacity"; to: 1; duration: 300; easing.type: Easing.OutCubic }
-          NumberAnimation { target: root; property: "revealScale"; to: 1; duration: 360; easing.type: Easing.OutCubic }
+          NumberAnimation { target: powerDownLayer; property: "flareScale"; to: 2.4; duration: 180; easing.type: Easing.OutCubic }
+          NumberAnimation { target: flareDot; property: "opacity"; to: 0; duration: 180; easing.type: Easing.InOutQuad }
+          SequentialAnimation {
+            PauseAnimation { duration: 120 }
+            ParallelAnimation {
+              NumberAnimation { target: crtBlack; property: "opacity"; to: 0; duration: 320; easing.type: Easing.OutCubic }
+              NumberAnimation { target: root; property: "revealOpacity"; to: 1; duration: 320; easing.type: Easing.OutCubic }
+              NumberAnimation { target: root; property: "revealScale"; to: 1; duration: 400; easing.type: Easing.OutCubic }
+              SequentialAnimation {
+                PauseAnimation { duration: 50 }
+                NumberAnimation { target: root; property: "contentReveal"; to: 1; duration: 320; easing.type: Easing.OutCubic }
+              }
+            }
+          }
         }
         ScriptAction { script: { snapshot.source = ""; root.finishPowerDown() } }
       }
     }
+  }
+
+  // Opacity fade for small status elements: in at stateMs easing out, out
+  // easing in (exits build momentum, entrances settle).
+  component StateFade: Behavior {
+    id: fade
+    NumberAnimation { duration: root.stateMs; easing.type: fade.targetValue > 0 ? Easing.OutCubic : Easing.InCubic }
   }
 }

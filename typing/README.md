@@ -40,6 +40,25 @@ Rules: theme colours only; nothing running when idle; at most a few hundred
 items; 60 Hz smooth; must work for any logo (wide wordmark, square symbol,
 coloured PNG with transparency); `reducedMotion` respected.
 
+## Motion
+
+Typing is high-frequency input, so a keystroke's response must start on the
+same frame and stay light; the richer motion belongs to submit and failure.
+Shared timings, so every effect feels like the same system:
+
+| Role | Timing |
+|---|---|
+| Keystroke | Arrives in ~160–200 ms with an ease-out; light accents decay within ~300–450 ms. Retarget from the current value (a `Behavior`, a restarted animation, or a spring) so fast typing never queues or snaps back. No scaling of the whole logo per key. |
+| Submit | Fill to full in ~250 ms, ease-out; a flash may decay a little longer. |
+| Failure | ~0.5–0.7 s in all, informative rather than punishing. Error tints use the host glitch's 50 ms in / 220 ms hold / 180 ms out. Squash or breath stays within 0.95–1.05. |
+| Reset | Instant, no fanfare. |
+| Reduced motion | ~200 ms opacity fades only. Retargetable per-band fades (twelve rows or columns, each with its own `Behavior`) never pop when typing fast. |
+
+Ease-out for arrivals, ease-in for departures and natural (exponential-like)
+decay for light; `Linear` only for time-like progress (a failure timeline, a
+sweep). Staggers stay under ~50 ms per item. Overshoot comes from a spring
+(cells' pop, the equalizer and liquid simulations), never a long easing tail.
+
 ## Testing
 
 `typing/harness/run.sh <name> [logo]` opens a small overlay window on the

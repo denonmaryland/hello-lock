@@ -1,5 +1,6 @@
 import QtQuick
 import "Presets.js" as Presets
+import "TypingSounds.js" as TypingSounds
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Pam
@@ -54,7 +55,7 @@ Item {
   readonly property var configDefaults: ({
     name: "", brand: "", logo: "", symbol: "", symbolParts: [], tintLogo: true,
     birthday: "", sounds: true, weather: true, powerDown: true, legendary: true, clock: true,
-    motion: "auto", typingEffect: "cells", handoff: "shuffle", brandingPresets: [], presetMode: "manual", selectedPreset: ""
+    motion: "auto", typingEffect: "cells", typingSound: "shuffle", handoff: "shuffle", greeting: true, unlockBackdrop: true, brandingPresets: [], presetMode: "manual", selectedPreset: ""
   })
   property var userConfig: ({})
   property string accountName: ""
@@ -304,6 +305,35 @@ Item {
     soundProc.running = true
   }
 
+  property var typingSoundBag: []
+  property string lockTypingSound: "pulse"
+  readonly property string typingSound: TypingSounds.normalize(config.typingSound)
+
+  function selectTypingSound() {
+    if (typingSound === "off") return
+    if (typingSound !== "shuffle") { lockTypingSound = typingSound; return }
+    var choice = TypingSounds.draw(typingSoundBag, lockTypingSound)
+    typingSoundBag = choice.remaining
+    lockTypingSound = choice.family
+  }
+
+  function playTypingSound() {
+    if (!lockRequested || authenticatingPassword || unlockTransition || reducedMotion || config.sounds === false || typingSound === "off") return
+    try { if (typingSoundLoader.item) typingSoundLoader.item.play() } catch (e) { /* Optional feedback only. */ }
+  }
+
+  Loader {
+    id: typingSoundLoader
+    active: root.config.sounds !== false && root.typingSound !== "off" && !root.reducedMotion
+    asynchronous: true
+    source: "TypingSound.qml"
+    onLoaded: {
+      item.pluginDir = root.pluginDir
+      item.family = Qt.binding(function() { return root.lockTypingSound })
+      item.engaged = Qt.binding(function() { return root.lockRequested && !root.unlockTransition && !root.authenticatingPassword })
+    }
+  }
+
   function clearSnapshots() {
     snapshotEpoch += 1
     snapshotExpiry.stop()
@@ -447,6 +477,7 @@ Item {
       lockStartedAt = Date.now()
       root.refreshMotion()
       if (typingEffect === "shuffle") lockTypingEffect = drawShuffle()
+      try { selectTypingSound() } catch (soundError) { console.warn("hello-lock typing sound selection failed") }
       // Drawn every lock (cheap); used only when the branding says @shuffle.
       lockSymbol = drawSymbol() || lockSymbol
       if (!typingListProc.running) typingListProc.running = true
@@ -642,6 +673,7 @@ Item {
         loadBackground: root.locked
         passwordText: root.enteredPassword
         onPasswordTextEdited: function(password) { root.enteredPassword = password }
+        onTypingSoundRequested: root.playTypingSound()
         onSubmitPassword: function(password) { root.submitPassword(password) }
         onClearFailureRequested: root.failureMessage = ""
         onWakeRequested: root.runWake()
@@ -827,6 +859,8 @@ Item {
   Binding { target: unlockSplashLoader.item; property: "logoPath"; value: root.logoPath; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "handoff"; value: String(root.config.handoff || "shuffle"); when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "legendaryEnabled"; value: root.config.legendary !== false; when: unlockSplashLoader.status === Loader.Ready }
+  Binding { target: unlockSplashLoader.item; property: "greetingEnabled"; value: root.config.greeting !== false; when: unlockSplashLoader.status === Loader.Ready }
+  Binding { target: unlockSplashLoader.item; property: "backdropEnabled"; value: root.config.unlockBackdrop !== false; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "symbolName"; value: root.symbolName; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "pluginDir"; value: root.pluginDir; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "reducedMotion"; value: root.reducedMotion; when: unlockSplashLoader.status === Loader.Ready }
@@ -1134,6 +1168,7 @@ Item {
     onStatusChanged: if (status === Loader.Error) { console.warn("hello-lock: settings failed to load"); root.settingsOpen = false }
   }
   Binding { target: settingsLoader.item; property: "away"; value: root.settingsAway; when: settingsLoader.status === Loader.Ready }
+  Binding { target: settingsLoader.item; property: "reducedMotion"; value: !root.hyprAnimations; when: settingsLoader.status === Loader.Ready }
 
   Connections {
     target: settingsLoader.item

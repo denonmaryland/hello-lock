@@ -35,12 +35,14 @@ Item {
   property real flash: 0
   property real flashTint: 0
   property real flashSweep: 1
-  // Failure timeline, 0..1 over failDuration; edge is driven from it.
+  // Failure timeline, 0..1 over failDuration; edge is driven from it. The
+  // keyframes below are in nominal ms of a 900 ms stutter, played in 620 ms
+  // (the failure token).
   property bool failing: false
   property real failT: 0
   property real failFrom: 1
-  readonly property int failDuration: 900
-  readonly property real failMs: failT * failDuration
+  readonly property int failDuration: 620
+  readonly property real failMs: failT * 900
 
   readonly property real inkX: inkRect.x
   readonly property real inkW: inkRect.width
@@ -109,8 +111,10 @@ Item {
     if (Math.abs(target - edgeAnim.to) < 0.001 && edgeAnim.running) return
     if (Math.abs(target - edge) < 0.001 && !edgeAnim.running) return
     if (target > edge) {
-      moveTo(target, holding ? 220 : 200, Easing.OutCubic)
-      sheenAnim.restart()
+      moveTo(target, holding ? 220 : 180, Easing.OutCubic)
+      // A sheen already on its way keeps going (it covers the new step);
+      // restarting it would snap it back to the left on every key.
+      if (!sheenAnim.running || sheen > 0.5) sheenAnim.restart()
     } else {
       moveTo(target, target === 0 && delta < -1 ? 360 : 170, Easing.OutCubic)
     }
@@ -142,15 +146,15 @@ Item {
   }
 
   NumberAnimation { id: edgeAnim; target: root; property: "edge" }
-  NumberAnimation { id: kickAnim; target: root; property: "kick"; from: 1; to: 0; duration: 520; easing.type: Easing.OutQuad }
-  NumberAnimation { id: sheenAnim; target: root; property: "sheen"; from: 0; to: 1; duration: 560; easing.type: Easing.InOutSine }
+  NumberAnimation { id: kickAnim; target: root; property: "kick"; from: 1; to: 0; duration: 360; easing.type: Easing.OutQuad }
+  NumberAnimation { id: sheenAnim; target: root; property: "sheen"; from: 0; to: 1; duration: 440; easing.type: Easing.InOutSine }
   ParallelAnimation {
     id: flashAnim
     NumberAnimation { target: root; property: "flashSweep"; from: 0; to: 1; duration: 230; easing.type: Easing.OutQuad }
     SequentialAnimation {
       PropertyAction { target: root; property: "flash"; value: 1 }
       PauseAnimation { duration: 200 }
-      NumberAnimation { target: root; property: "flash"; to: 0; duration: 520; easing.type: Easing.InQuad }
+      NumberAnimation { target: root; property: "flash"; to: 0; duration: 420; easing.type: Easing.InQuad }
     }
     NumberAnimation { target: root; property: "flashTint"; from: 0; to: 1; duration: 420; easing.type: Easing.InOutQuad }
   }
@@ -180,8 +184,9 @@ Item {
     return 0
   }
   onFailEdgeChanged: if (failing) edge = failFrom * failEdge
-  // Lit brightness: a power flicker, browning out as it goes.
-  readonly property var flickerSteps: [1, 0.45, 1, 0.85, 0.3, 1, 0.7, 0.2, 0.9, 0.5, 0.15, 0.75, 0.35, 0.6, 0.1, 0.4, 0.2, 0.3]
+  // Lit brightness: a power flicker, browning out as it goes. Shallow dips
+  // (never below ~half) read as failing power without strobing.
+  readonly property var flickerSteps: [1, 0.6, 1, 0.9, 0.55, 1, 0.8, 0.5, 0.95, 0.7, 0.5, 0.85, 0.6, 0.75, 0.45, 0.6, 0.5, 0.55]
   readonly property real failLit: failing ? flickerSteps[Math.min(flickerSteps.length - 1, Math.floor(failMs / 50))] * (1 - 0.5 * smooth(500, 900, failMs)) : 1
 
   // ---- Masks (hidden, permanently layered).

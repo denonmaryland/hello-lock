@@ -1,0 +1,35 @@
+# Every type in this folder must be listed: with a qmldir present, Quickshell
+# resolves this directory only through it (tests/test_helpers.py checks).
+singleton Theme 1.0 Theme.qml
+ActionButton 1.0 ActionButton.qml
+Badge 1.0 Badge.qml
+Chip 1.0 Chip.qml
+DashedBox 1.0 DashedBox.qml
+Dropdown 1.0 Dropdown.qml
+Glow 1.0 Glow.qml
+Glyph 1.0 Glyph.qml
+GroupLabel 1.0 GroupLabel.qml
+HourField 1.0 HourField.qml
+InputField 1.0 InputField.qml
+LineSlider 1.0 LineSlider.qml
+LockMock 1.0 LockMock.qml
+LogoImage 1.0 LogoImage.qml
+MonoText 1.0 MonoText.qml
+Placard 1.0 Placard.qml
+Rail 1.0 Rail.qml
+ScreenFrame 1.0 ScreenFrame.qml
+Segmented 1.0 Segmented.qml
+StageLock 1.0 StageLock.qml
+StageLogo 1.0 StageLogo.qml
+StagePresets 1.0 StagePresets.qml
+StageSound 1.0 StageSound.qml
+StageTyping 1.0 StageTyping.qml
+StageUnlock 1.0 StageUnlock.qml
+StageWeather 1.0 StageWeather.qml
+StageYou 1.0 StageYou.qml
+SwitchTrack 1.0 SwitchTrack.qml
+SymbolMark 1.0 SymbolMark.qml
+Tag 1.0 Tag.qml
+ToggleRow 1.0 ToggleRow.qml
+Transport 1.0 Transport.qml
+UiText 1.0 UiText.qml

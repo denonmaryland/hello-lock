@@ -26,6 +26,18 @@ Item {
   // service when it knows; start() also reads "motion": "reduced" from config.
   property bool reducedMotion: false
 
+  // Motion tokens shared by the steps and the controls below. Step changes
+  // are a "wait" cross-fade (out, swap, in) kept near 300 ms in total; the
+  // sideways shift and press scale drop out with reduced motion.
+  readonly property int hoverMs: 150
+  readonly property real pressScale: reducedMotion ? 1 : 0.97
+  readonly property int stepOutMs: 110
+  readonly property int stepInMs: 220
+  readonly property real stepShift: reducedMotion ? 0 : 20
+  readonly property int exitMs: 180
+  // Closing: the setup fades out (input off) before the service hears.
+  property bool closing: false
+
   signal closed()
   // "Not now": the service records it (this item is destroyed as soon as it closes).
   signal dismissed()
@@ -147,7 +159,8 @@ Item {
   readonly property bool previewTinted: logoChoice !== "image" || tintImage
   // The big preview shows the logo on step 3, the unlock symbol on step 4, the
   // logo again (running the typing effect) on step 5 and the symbol at the end.
-  readonly property bool symbolOnTop: step === 4 || step === 6
+  // Follows the shown step, so it swaps while the step content is faded out.
+  readonly property bool symbolOnTop: content.shownStep === 4 || content.shownStep === 6
   readonly property string previewTop: symbolOnTop ? symbolFile(symbolChoice) : previewLogo
   readonly property bool previewTopTinted: symbolOnTop && symbolChoice !== "logo" ? true : previewTinted
   readonly property color accent: Commons.Color.accent
@@ -199,22 +212,36 @@ Item {
     : true
 
   function next() {
-    if (!canContinue || saving) return
+    if (!canContinue || saving || closing) return
     if (step === stepCount - 1) { save(); return }
     direction = 1
     step += 1
   }
 
   function back() {
-    if (saving) return
+    if (saving || closing) return
     if (step === 0) { skip(); return }
     direction = -1
     step -= 1
   }
 
   function skip() {
-    dismissed()
-    closed()
+    leave(function() { root.dismissed(); root.closed() })
+  }
+
+  // Fade out, then report. A Timer (not the animation) emits, so a hidden
+  // window still closes on time.
+  property var exitThen: null
+  function leave(then) {
+    if (closing) return
+    closing = true
+    exitThen = then
+    exitTimer.start()
+  }
+  Timer {
+    id: exitTimer
+    interval: root.exitMs
+    onTriggered: { var then = root.exitThen; root.exitThen = null; if (then) then() }
   }
 
   function pad2(v) { v = String(v); return v.length === 1 ? "0" + v : v }
@@ -348,8 +375,7 @@ Item {
     onExited: function(code) {
       root.saving = false
       if (code === 0) {
-        root.tryUnlockRequested()
-        root.closed()
+        root.leave(function() { root.tryUnlockRequested(); root.closed() })
       } else {
         root.saveError = String(saveErr.text || "").trim() || "Couldn't save your settings."
       }
@@ -371,9 +397,19 @@ Item {
       id: stage
       anchors.fill: parent
       focus: true
-      opacity: 0
-      Component.onCompleted: opacity = 1
-      Behavior on opacity { NumberAnimation { duration: 420; easing.type: Easing.OutCubic } }
+      enabled: !root.closing
+      // Entrance waits a tick, until the service has set reducedMotion and
+      // called start(); the exit mirrors it, faster and easing in.
+      property bool entered: false
+      opacity: entered && !root.closing ? 1 : 0
+      Component.onCompleted: Qt.callLater(function() { stage.entered = true })
+      Behavior on opacity {
+        id: stageFade
+        NumberAnimation {
+          duration: stageFade.targetValue > 0 ? 320 : root.exitMs
+          easing.type: stageFade.targetValue > 0 ? Easing.OutCubic : Easing.InCubic
+        }
+      }
 
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape) { root.back(); event.accepted = true }
@@ -434,10 +470,11 @@ Item {
         y: parent.height * (root.symbolOnTop ? 0.05 : 0.12)
         width: parent.width * 0.42
         height: parent.height * (root.symbolOnTop ? 0.15 : 0.17)
-        opacity: root.step >= 3 && root.previewTop ? 1 : 0
-        Behavior on y { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
-        Behavior on height { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
-        Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+        // Fades out and back in with the step content: logo and symbol swap
+        // (and re-place) while it is hidden, instead of jumping in view.
+        property real present: content.shownStep >= 3 && root.previewTop ? 1 : 0
+        Behavior on present { NumberAnimation { duration: root.stepInMs; easing.type: Easing.OutCubic } }
+        opacity: present * content.opacity
 
         Image {
           id: previewImage
@@ -554,17 +591,12 @@ Item {
           : typingDemo.holding ? root.accent : Qt.rgba(root.text.r, root.text.g, root.text.b, 0.7)
         opacity: typingDemo.active && (typingDemo.typed > 0 || typingDemo.holding) ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: typingDemo.failed ? 700 : 160; easing.type: Easing.OutCubic } }
-        // The wrong-password shake, as the lock's field does it (not with reduced motion).
-        property real shakeX: 0
+        // The wrong-password shake, as the lock's field does it: the same
+        // damped sine over 320 ms (not with reduced motion).
+        property real shakeT: 1
+        readonly property real shakeX: shakeT >= 1 ? 0 : -10 * Math.pow(1 - shakeT, 2) * Math.sin(shakeT * 5 * Math.PI)
         transform: Translate { x: demoDots.shakeX }
-        SequentialAnimation {
-          id: previewShake
-          NumberAnimation { target: demoDots; property: "shakeX"; to: -10; duration: 50; easing.type: Easing.OutQuad }
-          NumberAnimation { target: demoDots; property: "shakeX"; to: 8; duration: 70; easing.type: Easing.InOutQuad }
-          NumberAnimation { target: demoDots; property: "shakeX"; to: -5; duration: 60; easing.type: Easing.InOutQuad }
-          NumberAnimation { target: demoDots; property: "shakeX"; to: 2; duration: 50; easing.type: Easing.InOutQuad }
-          NumberAnimation { target: demoDots; property: "shakeX"; to: 0; duration: 40; easing.type: Easing.OutQuad }
-        }
+        NumberAnimation { id: previewShake; target: demoDots; property: "shakeT"; from: 0; to: 1; duration: 320 }
         Repeater {
           model: 12
           Rectangle {
@@ -582,7 +614,7 @@ Item {
       // fail, rest, repeat. Shuffle moves to the next effect each loop.
       QtObject {
         id: typingDemo
-        readonly property bool active: root.step === 5 && win.visible
+        readonly property bool active: content.shownStep === 5 && win.visible
         property int typed: 0
         property bool holding: false
         property bool failed: false
@@ -633,9 +665,9 @@ Item {
         id: page
         anchors.horizontalCenter: parent.horizontalCenter
         width: Math.min(parent.width * 0.6, 720)
-        y: parent.height * (root.step === 4 ? 0.23 : root.step >= 3 ? 0.36 : 0.30)
+        // Placed by the shown step: it moves while its content is faded out.
+        y: parent.height * (content.shownStep === 4 ? 0.23 : content.shownStep >= 3 ? 0.36 : 0.30)
         height: parent.height * 0.5
-        Behavior on y { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
 
         property real shift: 0
         transform: Translate { x: page.shift }
@@ -646,18 +678,19 @@ Item {
         SequentialAnimation {
           id: stepAnim
           ParallelAnimation {
-            NumberAnimation { target: content; property: "opacity"; to: 0; duration: 110 }
-            NumberAnimation { target: page; property: "shift"; to: -root.direction * 26; duration: 110 }
+            NumberAnimation { target: content; property: "opacity"; to: 0; duration: root.stepOutMs; easing.type: Easing.InQuad }
+            NumberAnimation { target: page; property: "shift"; to: -root.direction * root.stepShift; duration: root.stepOutMs; easing.type: Easing.InQuad }
           }
-          ScriptAction { script: { content.shownStep = root.step; page.shift = root.direction * 26 } }
+          ScriptAction { script: { content.shownStep = root.step; page.shift = root.direction * root.stepShift } }
           ParallelAnimation {
-            NumberAnimation { target: content; property: "opacity"; to: 1; duration: 300; easing.type: Easing.OutCubic }
-            NumberAnimation { target: page; property: "shift"; to: 0; duration: 380; easing.type: Easing.OutCubic }
+            NumberAnimation { target: content; property: "opacity"; to: 1; duration: root.stepInMs; easing.type: Easing.OutCubic }
+            NumberAnimation { target: page; property: "shift"; to: 0; duration: root.stepInMs + 40; easing.type: Easing.OutCubic }
           }
         }
+        // Just after the swap, once the new step's fields exist.
         Timer {
           id: focusTimer
-          interval: 130
+          interval: root.stepOutMs + 20
           onTriggered: {
             if (content.shownStep === 1) nameInput.forceActiveFocus()
             else if (content.shownStep === 2) monthInput.forceActiveFocus()
@@ -944,7 +977,7 @@ Item {
             visible: content.shownStep === 5
             anchors.horizontalCenter: parent.horizontalCenter
             opacity: root.typingEffect === "shuffle" && root.previewEffect ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: 200 } }
+            Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
             text: "NOW SHOWING · " + root.effectLabel(root.previewEffect).toUpperCase()
             readonly property int size: Math.max(12, Math.round(win.height * 0.014))
             color: root.accent
@@ -1031,8 +1064,9 @@ Item {
             height: 7
             radius: 3.5
             color: index <= root.step ? root.accent : Qt.rgba(root.text.r, root.text.g, root.text.b, 0.25)
-            Behavior on width { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
-            Behavior on color { ColorAnimation { duration: 260 } }
+            // One dot hands its length to the next: a morph, so ease-in-out.
+            Behavior on width { NumberAnimation { duration: 240; easing.type: Easing.InOutCubic } }
+            Behavior on color { ColorAnimation { duration: 240; easing.type: Easing.InOutCubic } }
           }
         }
       }
@@ -1068,7 +1102,10 @@ Item {
                     : chipMouse.containsMouse ? Qt.rgba(root.text.r, root.text.g, root.text.b, 0.08) : "transparent"
     border.width: 1
     border.color: selected ? root.accent : Qt.rgba(root.text.r, root.text.g, root.text.b, 0.22)
-    Behavior on color { ColorAnimation { duration: 160 } }
+    scale: chipMouse.pressed ? root.pressScale : 1
+    Behavior on color { ColorAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
+    Behavior on border.color { ColorAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
+    Behavior on scale { NumberAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
     Text {
       id: chipText
       anchors.centerIn: parent
@@ -1095,9 +1132,10 @@ Item {
                     : tileMouse.containsMouse ? Qt.rgba(root.text.r, root.text.g, root.text.b, 0.08) : "transparent"
     border.width: 1
     border.color: selected ? root.accent : Qt.rgba(root.text.r, root.text.g, root.text.b, 0.16)
-    scale: tileMouse.pressed ? 0.95 : 1
-    Behavior on color { ColorAnimation { duration: 160 } }
-    Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+    scale: tileMouse.pressed ? root.pressScale : 1
+    Behavior on color { ColorAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
+    Behavior on border.color { ColorAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
+    Behavior on scale { NumberAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
     Image {
       id: tileImage
       x: tile.width * 0.08; y: x
@@ -1127,9 +1165,13 @@ Item {
     height: Math.round(win.height * 0.05)
     radius: height / 2
     opacity: enabled ? 1 : 0.4
-    color: btnMouse.pressed ? Qt.darker(root.accent, 1.15) : root.accent
-    scale: btnMouse.containsMouse && enabled ? 1.03 : 1
-    Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+    // Hover lifts the accent a touch, press settles it and the button in.
+    color: btnMouse.pressed ? Qt.darker(root.accent, 1.12)
+      : btnMouse.containsMouse ? Qt.lighter(root.accent, 1.08) : root.accent
+    scale: btnMouse.pressed ? root.pressScale : 1
+    Behavior on opacity { NumberAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
+    Behavior on color { ColorAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
+    Behavior on scale { NumberAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
     Text {
       id: btnText
       anchors.centerIn: parent
@@ -1150,6 +1192,9 @@ Item {
     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
     text: label
     color: Qt.rgba(root.text.r, root.text.g, root.text.b, tbMouse.containsMouse ? 0.95 : 0.6)
+    scale: tbMouse.pressed ? root.pressScale : 1
+    Behavior on color { ColorAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
+    Behavior on scale { NumberAnimation { duration: root.hoverMs; easing.type: Easing.OutCubic } }
     font.family: "Oxanium"
     font.pixelSize: Math.round(win.height * 0.016)
     MouseArea { id: tbMouse; anchors.fill: parent; anchors.margins: -10; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: tb.clicked() }

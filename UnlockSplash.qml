@@ -41,6 +41,14 @@ Item {
   property string greetingLine: ""
   property string telemetryLine: ""
   property bool titleCard: false
+  // Settings: greeting text (status line, greeting, telemetry) and the stage
+  // behind the symbol. Per play, a preview can override either. With the
+  // backdrop off the blurred wallpaper fades away right after release, so the
+  // symbol plays over the live desktop.
+  property bool greetingEnabled: true
+  property bool backdropEnabled: true
+  property bool showText: true
+  property bool clearBackdrop: false
   // Sound for the current play (unlock-<variant>, unlock-legendary, unlock-short).
   property string lastSound: ""
   signal soundRequested(string name)
@@ -103,8 +111,10 @@ Item {
   readonly property int pixelsVariant: 10
   readonly property real legendaryChance: 0.02
   readonly property var variantNames: ["coin", "assemble", "scan", "glitch", "heartbeat", "orbit", "monolith", "particles", "warp", "split", "pixels", "legendary"]
-  // When each animation's symbol has settled and the greeting may begin (ms).
-  readonly property var textDelays: [1250, 1000, 1150, 1000, 900, 1150, 1050, 1250, 950, 1000, 1200, 2450]
+  // When each animation's symbol has settled and the greeting may begin (ms):
+  // about 250ms after its last hit, once the flash has decayed, so the text
+  // never competes with the symbol for attention.
+  readonly property var textDelays: [1250, 1000, 1280, 1150, 1450, 1150, 1250, 1250, 950, 1000, 1400, 2450]
   // Reduced motion: greeting delay of the calm fade.
   readonly property int calmTextDelay: 700
 
@@ -405,6 +415,8 @@ Item {
     // Previews can ask for a particular transition.
     var askedHandoff = typeof ctx.handoff === "string" ? ctx.handoff.toLowerCase() : ""
     if (knowsHandoff(askedHandoff)) activeHandoff = askedHandoff
+    showText = typeof ctx.greeting === "boolean" ? ctx.greeting : greetingEnabled
+    clearBackdrop = !(typeof ctx.backdrop === "boolean" ? ctx.backdrop : backdropEnabled)
     var forced = finiteNumber(forcedVariant)
     var away = finiteNumber(ctx.awaySeconds)
     shortMode = !calm && (ctx.forceShort === true || (away !== null && away < shortAwayLimit))
@@ -416,8 +428,12 @@ Item {
         variant = forced
       else
         variant = (legendaryEnabled && Math.random() < legendaryChance) ? legendaryVariant : pickVariant()
-      pickGreeting(ctx)
-      telemetryLine = buildTelemetry(ctx.status)
+      if (showText) {
+        pickGreeting(ctx)
+        telemetryLine = buildTelemetry(ctx.status)
+      } else {
+        statusLine = ""; greetingLine = ""; telemetryLine = ""; titleCard = false
+      }
       // The calm fade has no hits to time a chime to: a soft two-note tap.
       lastSound = calm ? "unlock-short" : "unlock-" + variantNames[variant]
     }
@@ -570,10 +586,26 @@ Item {
       property real greetRise: 1
       property real greetTrack: 1
       property real telemetryOpacity: 0
+      // The stage behind the symbol (wallpaper + tint): 1 until the backdrop
+      // setting fades it out; the halo takes over so the symbol stays legible.
+      property real backdropOpacity: 1
       property bool blink: true
       property int textDelay: 1000
       property int typeDuration: 400
       property int holdDuration: 1000
+      // Greeting off: how long the settled symbol holds before the exit (ms).
+      readonly property int plainHold: 450
+
+      // Shared landing hit (ms), so every variant's arrival reads as the same
+      // system: a fast flash attack with an exponential-style decay, a bloom
+      // that settles to the resting glow, and one accent ring.
+      readonly property int hitFlashIn: 70
+      readonly property int hitFlashOut: 450
+      readonly property int hitBloomIn: 140
+      readonly property int hitBloomOut: 800
+      readonly property real restGlow: 0.55
+      readonly property int ringDuration: 900
+      readonly property real ringReach: 1.7
 
       function prand(i, k) {
         var x = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453
@@ -583,6 +615,9 @@ Item {
       function stopAll() {
         for (var i = 0; i < variantAnims.length; i++) variantAnims[i].stop()
         textTimeline.stop()
+        plainTimeline.stop()
+        exitTimeline.stop()
+        backdropFade.stop()
         shortAnim.stop()
         calmAnim.stop()
         pixWait.stop()
@@ -622,6 +657,7 @@ Item {
         typed = 0; statusOpacity = 0
         greetOpacity = 0; greetRise = 1; greetTrack = 1
         telemetryOpacity = 0
+        backdropOpacity = 1
       }
 
       // Starting pose for each animation, before its timeline runs.
@@ -631,7 +667,7 @@ Item {
         case 1: outerY = -0.45; innerY = 0.45; break
         case 2: outerOpacity = 1; innerOpacity = 1; reveal = 0; break
         case 3: outerOpacity = 1; innerOpacity = 1; symbolOpacity = 0; glitch = 1; break
-        case 4: outerOpacity = 1; innerOpacity = 1; symbolScale = 0; break
+        case 4: outerOpacity = 1; innerOpacity = 1; symbolScale = 0.6; symbolOpacity = 0; break
         case 5: symbolScale = 1.15; break
         case 6: outerOpacity = 1; innerOpacity = 1; symbolOpacity = 0; flipAngle = 80; symbolRise = 0.35; break
         case 7: break
@@ -666,7 +702,7 @@ Item {
           }
         }
         // No usable transition file: the built-in fall back.
-        emergeScale = 0.84
+        emergeScale = 0.86
         markRecede.restart()
       }
 
@@ -675,6 +711,11 @@ Item {
         primary = root.isPrimaryScreen(win.modelData)
         exitScale = root.calm ? 1 : 1.05
         beginHandoff()
+        if (root.clearBackdrop) {
+          // A calm fade-in has no lock screen under it to match.
+          if (root.stageFadeIn) backdropOpacity = 0
+          else backdropFade.restart()
+        }
         if (root.shortMode) {
           symbolScale = 0.9
           shortAnim.restart()
@@ -700,8 +741,15 @@ Item {
           setup(root.variant)
           textDelay = root.textDelays[root.variant]
           variantAnims[root.variant].restart()
-          textTimeline.restart()
+          startText()
         }
+      }
+
+      // The greeting, then the exit; or, with the greeting off, a short hold
+      // on the settled symbol and the same exit.
+      function startText() {
+        if (root.showText) textTimeline.restart()
+        else plainTimeline.restart()
       }
 
       function startCalm(delay, fadeStage) {
@@ -709,7 +757,7 @@ Item {
         calmDelay = delay
         if (fadeStage) scene.opacity = 0
         calmAnim.restart()
-        textTimeline.restart()
+        startText()
       }
 
       readonly property var variantAnims: [coinAnim, assembleAnim, scanAnim, glitchAnim, heartbeatAnim, orbitAnim, monolithAnim, particlesAnim, warpAnim, splitAnim, pixelsAnim, legendaryAnim]
@@ -725,7 +773,7 @@ Item {
             stop()
             win.textDelay = root.textDelays[root.pixelsVariant]
             pixelsAnim.restart()
-            textTimeline.restart()
+            startText()
           } else if (win.pixWaited >= 25) {
             stop()
             console.warn("hello-lock splash: no pixel grid for this symbol; playing the calm fade")
@@ -823,38 +871,73 @@ Item {
           }
         }
 
-        // Stage: the same blurred wallpaper as the lock screen, tinted.
-        Rectangle {
+        // Stage: the same blurred wallpaper as the lock screen, tinted. One
+        // layer while it fades out (backdrop off), so it leaves as a single
+        // sheet rather than item by item.
+        Item {
+          id: backdrop
           anchors.fill: parent
-          color: Commons.Color.background
+          opacity: win.backdropOpacity
+          layer.enabled: root.clearBackdrop
+
+          Rectangle {
+            anchors.fill: parent
+            color: Commons.Color.background
+          }
+
+          Image {
+            id: wallpaper
+            anchors.fill: parent
+            source: (root.preload || root.shown) ? root.fileUrl(root.backgroundPath) : ""
+            fillMode: Image.PreserveAspectCrop
+            asynchronous: true
+            cache: false
+            sourceSize.width: width
+            sourceSize.height: height
+          }
+
+          MultiEffect {
+            anchors.fill: wallpaper
+            source: wallpaper
+            autoPaddingEnabled: false
+            blurEnabled: wallpaper.status === Image.Ready
+            blur: 1.0
+            blurMax: 128
+            blurMultiplier: 1.25
+            contrast: -0.08
+          }
+
+          Rectangle {
+            anchors.fill: parent
+            color: Commons.Color.background
+            opacity: root.stageDim
+          }
         }
 
-        Image {
-          id: wallpaper
-          anchors.fill: parent
-          source: (root.preload || root.shown) ? root.fileUrl(root.backgroundPath) : ""
-          fillMode: Image.PreserveAspectCrop
-          asynchronous: true
-          cache: false
-          sourceSize.width: width
-          sourceSize.height: height
+        // Backdrop off: a soft dark halo behind the symbol instead, so it
+        // reads over a bright window. Takes over as the stage fades out.
+        Rectangle {
+          id: haloSource
+          width: win.symbolSize * 1.7
+          height: width
+          radius: width / 2
+          color: Commons.Color.background
+          visible: false
+          layer.enabled: root.clearBackdrop
         }
 
         MultiEffect {
-          anchors.fill: wallpaper
-          source: wallpaper
-          autoPaddingEnabled: false
-          blurEnabled: wallpaper.status === Image.Ready
+          x: scene.width / 2 - width / 2
+          y: win.symbolCenterY - height / 2
+          width: haloSource.width
+          height: haloSource.height
+          source: haloSource
+          visible: root.clearBackdrop && opacity > 0
+          opacity: (1 - win.backdropOpacity) * 0.4
+          autoPaddingEnabled: true
+          blurEnabled: true
           blur: 1.0
-          blurMax: 128
-          blurMultiplier: 1.25
-          contrast: -0.08
-        }
-
-        Rectangle {
-          anchors.fill: parent
-          color: Commons.Color.background
-          opacity: root.stageDim
+          blurMax: 96
         }
 
         MouseArea {
@@ -862,7 +945,8 @@ Item {
           acceptedButtons: Qt.AllButtons
           hoverEnabled: true
           // No pointer on the boot screen; it returns when the overlay unmaps.
-          cursorShape: Qt.BlankCursor
+          // With the desktop showing, the pointer stays.
+          cursorShape: root.clearBackdrop ? Qt.ArrowCursor : Qt.BlankCursor
           onPressed: root.skip()
         }
 
@@ -1365,7 +1449,8 @@ Item {
               width: modelData.w * stageSymbol.sz + 0.7
               height: modelData.h * stageSymbol.sz + 0.7
               rotation: modelData.r * (1 - e)
-              scale: f < 1 ? 0.3 + 0.7 * e : 1 + 0.22 * Math.sin(l * Math.PI) * (1 - l)
+              // Landing pop peaks near 1.05: a tick, not a bounce.
+              scale: f < 1 ? 0.3 + 0.7 * e : 1 + 0.09 * Math.sin(l * Math.PI) * (1 - l)
               opacity: win.pixOpacity * Math.min(1, f * 2.2)
               color: f < 1 ? win.glowColor : face
 
@@ -1605,14 +1690,16 @@ Item {
 
       // Logo handoff, run alongside every variant from its first frame: the
       // logo shrinks back and sinks as it fades, while the symbol (behind it)
-      // grows into its own starting pose. Easing out, so it is already moving
-      // on the frame the lock releases.
+      // grows into its own starting pose. Same curves and durations as
+      // handoff/fallback.qml (HandoffEffect's tokens), so a failed load feels
+      // the same; the exit curve keeps some initial speed, so it is already
+      // moving on the frame the lock releases.
       ParallelAnimation {
         id: markRecede
-        NumberAnimation { target: win; property: "markScale"; from: 1; to: 0.74; duration: 650; easing.type: Easing.OutCubic }
-        NumberAnimation { target: win; property: "markDrop"; from: 0; to: 0.03; duration: 650; easing.type: Easing.OutCubic }
-        NumberAnimation { target: win; property: "markOpacity"; from: 1; to: 0; duration: 520; easing.type: Easing.InOutQuad }
-        NumberAnimation { target: win; property: "emergeScale"; from: 0.84; to: 1; duration: 750; easing.type: Easing.OutCubic }
+        NumberAnimation { target: win; property: "markScale"; from: 1; to: 0.8; duration: 620; easing.type: Easing.BezierSpline; easing.bezierCurve: [0.4, 0.1, 0.85, 0.4, 1, 1] }
+        NumberAnimation { target: win; property: "markDrop"; from: 0; to: 0.025; duration: 620; easing.type: Easing.BezierSpline; easing.bezierCurve: [0.4, 0.1, 0.85, 0.4, 1, 1] }
+        NumberAnimation { target: win; property: "markOpacity"; from: 1; to: 0; duration: 520; easing.type: Easing.BezierSpline; easing.bezierCurve: [0.42, 0.12, 0.4, 1, 1, 1] }
+        NumberAnimation { target: win; property: "emergeScale"; from: 0.86; to: 1; duration: 760; easing.type: Easing.BezierSpline; easing.bezierCurve: [0.2, 0.6, 0.35, 1, 1, 1] }
       }
 
       // Reduced motion and other screens: the logo just fades.
@@ -1639,13 +1726,13 @@ Item {
         SequentialAnimation {
           PauseAnimation { duration: 250 }
           NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 450; easing.type: Easing.OutQuad }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 700; easing.type: Easing.InOutQuad }
+          NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: 700; easing.type: Easing.InOutQuad }
         }
         SequentialAnimation {
           PauseAnimation { duration: 1000 }
           ParallelAnimation {
-            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: 900; easing.type: Easing.OutQuad }
+            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+            NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
           }
         }
         SequentialAnimation {
@@ -1655,33 +1742,40 @@ Item {
       }
 
       // 1 · Assemble: arch drops in from above, pedestal rises from below,
-      // they dock with a flash.
+      // they dock with a flash. A gentle ease-out lands both together right
+      // on the knock (~0.6s) rather than creeping in early, and the joined
+      // symbol gives by 1.5% as it takes the impact.
       ParallelAnimation {
         id: assembleAnim
         NumberAnimation { target: win; property: "outerOpacity"; from: 0; to: 1; duration: 350; easing.type: Easing.OutCubic }
-        NumberAnimation { target: win; property: "outerY"; from: -0.45; to: 0; duration: 750; easing.type: Easing.OutQuint }
+        NumberAnimation { target: win; property: "outerY"; from: -0.45; to: 0; duration: 620; easing.type: Easing.OutQuad }
         SequentialAnimation {
           PauseAnimation { duration: 80 }
           ParallelAnimation {
             NumberAnimation { target: win; property: "innerOpacity"; from: 0; to: 1; duration: 350; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "innerY"; from: 0.45; to: 0; duration: 750; easing.type: Easing.OutQuint }
+            NumberAnimation { target: win; property: "innerY"; from: 0.45; to: 0; duration: 540; easing.type: Easing.OutQuad }
           }
         }
         SequentialAnimation {
-          PauseAnimation { duration: 600 }
-          NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: 70 }
-          NumberAnimation { target: win; property: "flash"; to: 0; duration: 450; easing.type: Easing.OutCubic }
+          PauseAnimation { duration: 590 }
+          NumberAnimation { target: win; property: "symbolScale"; to: 0.985; duration: 70; easing.type: Easing.OutQuad }
+          NumberAnimation { target: win; property: "symbolScale"; to: 1; duration: 320; easing.type: Easing.OutCubic }
         }
         SequentialAnimation {
           PauseAnimation { duration: 600 }
-          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 150 }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 800; easing.type: Easing.InOutQuad }
+          NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: win.hitFlashIn }
+          NumberAnimation { target: win; property: "flash"; to: 0; duration: win.hitFlashOut; easing.type: Easing.OutCubic }
+        }
+        SequentialAnimation {
+          PauseAnimation { duration: 600 }
+          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: win.hitBloomIn; easing.type: Easing.OutCubic }
+          NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: win.hitBloomOut; easing.type: Easing.InOutQuad }
         }
         SequentialAnimation {
           PauseAnimation { duration: 620 }
           ParallelAnimation {
-            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "ringOpacity"; from: 0.6; to: 0; duration: 900; easing.type: Easing.OutQuad }
+            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+            NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
           }
         }
         SequentialAnimation {
@@ -1690,103 +1784,115 @@ Item {
         }
       }
 
-      // 2 · Scan: an accent beam sweeps down, revealing the symbol.
+      // 2 · Scan: an accent beam sweeps down, revealing the symbol; the glow
+      // builds with it and peaks as the beam lands.
       ParallelAnimation {
         id: scanAnim
-        NumberAnimation { target: win; property: "scanOpacity"; from: 0; to: 1; duration: 150 }
+        NumberAnimation { target: win; property: "scanOpacity"; from: 0; to: 1; duration: 150; easing.type: Easing.OutCubic }
         NumberAnimation { target: win; property: "reveal"; from: 0; to: 1; duration: 1000; easing.type: Easing.InOutCubic }
         SequentialAnimation {
           PauseAnimation { duration: 950 }
-          NumberAnimation { target: win; property: "scanOpacity"; to: 0; duration: 250 }
+          NumberAnimation { target: win; property: "scanOpacity"; to: 0; duration: 250; easing.type: Easing.InQuad }
         }
         SequentialAnimation {
           PauseAnimation { duration: 300 }
-          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 0.75; duration: 700 }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 500 }
+          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 0.75; duration: 700; easing.type: Easing.InQuad }
+          NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: 500; easing.type: Easing.InOutQuad }
         }
         SequentialAnimation {
           PauseAnimation { duration: 1000 }
-          NumberAnimation { target: win; property: "flash"; from: 0; to: 0.3; duration: 80 }
-          NumberAnimation { target: win; property: "flash"; to: 0; duration: 400 }
+          NumberAnimation { target: win; property: "flash"; from: 0; to: 0.3; duration: win.hitFlashIn }
+          NumberAnimation { target: win; property: "flash"; to: 0; duration: win.hitFlashOut; easing.type: Easing.OutCubic }
         }
         SequentialAnimation {
           PauseAnimation { duration: 1000 }
           ParallelAnimation {
-            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "ringOpacity"; from: 0.5; to: 0; duration: 900; easing.type: Easing.OutQuad }
+            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+            NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
           }
         }
       }
 
       // 3 · Glitch: flickers in through color ghosts and torn slices, then locks.
+      // Each dropout lands on one of the cue's stutter blips (0.13, 0.205,
+      // 0.52s); the tear then eases in to the lock at 0.88s.
       ParallelAnimation {
         id: glitchAnim
         SequentialAnimation {
           NumberAnimation { target: win; property: "symbolOpacity"; to: 1; duration: 60 }
-          NumberAnimation { target: win; property: "symbolOpacity"; to: 0.25; duration: 50 }
-          NumberAnimation { target: win; property: "symbolOpacity"; to: 1; duration: 60 }
-          PauseAnimation { duration: 120 }
-          NumberAnimation { target: win; property: "symbolOpacity"; to: 0.55; duration: 40 }
+          PauseAnimation { duration: 65 }
+          NumberAnimation { target: win; property: "symbolOpacity"; to: 0.25; duration: 20 }
+          NumberAnimation { target: win; property: "symbolOpacity"; to: 1; duration: 50 }
+          NumberAnimation { target: win; property: "symbolOpacity"; to: 0.6; duration: 20 }
+          NumberAnimation { target: win; property: "symbolOpacity"; to: 1; duration: 45 }
+          PauseAnimation { duration: 255 }
+          NumberAnimation { target: win; property: "symbolOpacity"; to: 0.5; duration: 20 }
           NumberAnimation { target: win; property: "symbolOpacity"; to: 1; duration: 60 }
         }
         SequentialAnimation {
           PauseAnimation { duration: 480 }
-          NumberAnimation { target: win; property: "glitch"; from: 1; to: 0; duration: 420; easing.type: Easing.InQuad }
+          NumberAnimation { target: win; property: "glitch"; from: 1; to: 0; duration: 400; easing.type: Easing.InQuad }
         }
         SequentialAnimation {
           PauseAnimation { duration: 880 }
-          NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: 60 }
-          NumberAnimation { target: win; property: "flash"; to: 0; duration: 400 }
+          NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: win.hitFlashIn }
+          NumberAnimation { target: win; property: "flash"; to: 0; duration: win.hitFlashOut; easing.type: Easing.OutCubic }
         }
         SequentialAnimation {
           PauseAnimation { duration: 880 }
-          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 120 }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 700 }
+          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: win.hitBloomIn; easing.type: Easing.OutCubic }
+          NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: win.hitBloomOut; easing.type: Easing.InOutQuad }
         }
         SequentialAnimation {
           PauseAnimation { duration: 900 }
           ParallelAnimation {
-            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: 900; easing.type: Easing.OutQuad }
+            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+            NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
           }
         }
       }
 
-      // 4 · Heartbeat: pops in, then two power pulses like a console LED.
+      // 4 · Heartbeat: swells in with one soft overshoot, then two power
+      // pulses like a console LED, on the cue's beats (0.76 and 1.25s). Each
+      // pulse is a quick rise and an exponential-style relax, and each sends
+      // out its own ring.
       ParallelAnimation {
         id: heartbeatAnim
+        NumberAnimation { target: win; property: "symbolOpacity"; from: 0; to: 1; duration: 260; easing.type: Easing.OutCubic }
         SequentialAnimation {
-          NumberAnimation { target: win; property: "symbolScale"; from: 0; to: 1.08; duration: 420; easing.type: Easing.OutCubic }
-          NumberAnimation { target: win; property: "symbolScale"; to: 1; duration: 220; easing.type: Easing.InOutQuad }
+          // OutBack peaks near 1.04 and settles by 640ms, without a wobble.
+          NumberAnimation { target: win; property: "symbolScale"; from: 0.6; to: 1; duration: 640; easing.type: Easing.OutBack }
           PauseAnimation { duration: 120 }
           NumberAnimation { target: win; property: "symbolScale"; to: 1.05; duration: 110; easing.type: Easing.OutQuad }
-          NumberAnimation { target: win; property: "symbolScale"; to: 1; duration: 230; easing.type: Easing.InQuad }
+          NumberAnimation { target: win; property: "symbolScale"; to: 1; duration: 230; easing.type: Easing.OutCubic }
           PauseAnimation { duration: 150 }
           NumberAnimation { target: win; property: "symbolScale"; to: 1.035; duration: 110; easing.type: Easing.OutQuad }
-          NumberAnimation { target: win; property: "symbolScale"; to: 1; duration: 260; easing.type: Easing.InQuad }
+          NumberAnimation { target: win; property: "symbolScale"; to: 1; duration: 260; easing.type: Easing.OutCubic }
         }
         SequentialAnimation {
-          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 0.6; duration: 420 }
+          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 0.6; duration: 420; easing.type: Easing.OutCubic }
           PauseAnimation { duration: 340 }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 1; duration: 110 }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 0.5; duration: 230 }
+          NumberAnimation { target: win; property: "glowOpacity"; to: 1; duration: 110; easing.type: Easing.OutQuad }
+          NumberAnimation { target: win; property: "glowOpacity"; to: 0.5; duration: 230; easing.type: Easing.OutCubic }
           PauseAnimation { duration: 150 }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 0.9; duration: 110 }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 260 }
+          NumberAnimation { target: win; property: "glowOpacity"; to: 0.9; duration: 110; easing.type: Easing.OutQuad }
+          NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: 260; easing.type: Easing.OutCubic }
         }
         SequentialAnimation {
           PauseAnimation { duration: 760 }
           NumberAnimation { target: win; property: "flash"; from: 0; to: 0.25; duration: 110 }
-          NumberAnimation { target: win; property: "flash"; to: 0; duration: 230 }
+          NumberAnimation { target: win; property: "flash"; to: 0; duration: 230; easing.type: Easing.OutCubic }
           PauseAnimation { duration: 150 }
           NumberAnimation { target: win; property: "flash"; to: 0.18; duration: 110 }
-          NumberAnimation { target: win; property: "flash"; to: 0; duration: 260 }
+          NumberAnimation { target: win; property: "flash"; to: 0; duration: 260; easing.type: Easing.OutCubic }
         }
+        // One ring per beat: the first is all but faded when the second
+        // beat restarts it.
         SequentialAnimation {
           PauseAnimation { duration: 760 }
           ParallelAnimation {
-            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.6; duration: 700; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "ringOpacity"; from: 0.6; to: 0; duration: 700; easing.type: Easing.OutQuad }
+            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.55; duration: 490; easing.type: Easing.OutCubic }
+            NumberAnimation { target: win; property: "ringOpacity"; from: 0.6; to: 0; duration: 490; easing.type: Easing.OutQuad }
           }
           ParallelAnimation {
             NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.6; duration: 700; easing.type: Easing.OutCubic }
@@ -1798,26 +1904,27 @@ Item {
       // 5 · Orbit: accent arcs spiral inward and collapse into the symbol.
       ParallelAnimation {
         id: orbitAnim
-        NumberAnimation { target: win; property: "arcOpacity"; from: 0; to: 1; duration: 200 }
+        NumberAnimation { target: win; property: "arcOpacity"; from: 0; to: 1; duration: 200; easing.type: Easing.OutCubic }
         NumberAnimation { target: win; property: "arcT"; from: 0; to: 1; duration: 900; easing.type: Easing.InOutCubic }
         SequentialAnimation {
           PauseAnimation { duration: 860 }
           ParallelAnimation {
-            NumberAnimation { target: win; property: "arcOpacity"; to: 0; duration: 220 }
-            NumberAnimation { target: win; property: "outerOpacity"; from: 0; to: 1; duration: 120 }
-            NumberAnimation { target: win; property: "innerOpacity"; from: 0; to: 1; duration: 120 }
+            NumberAnimation { target: win; property: "arcOpacity"; to: 0; duration: 220; easing.type: Easing.InQuad }
+            NumberAnimation { target: win; property: "outerOpacity"; from: 0; to: 1; duration: 120; easing.type: Easing.OutCubic }
+            NumberAnimation { target: win; property: "innerOpacity"; from: 0; to: 1; duration: 120; easing.type: Easing.OutCubic }
             NumberAnimation { target: win; property: "symbolScale"; from: 1.15; to: 1; duration: 600; easing.type: Easing.OutQuint }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: 60 }
-              NumberAnimation { target: win; property: "flash"; to: 0; duration: 450; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: win.hitFlashIn }
+              NumberAnimation { target: win; property: "flash"; to: 0; duration: win.hitFlashOut; easing.type: Easing.OutCubic }
             }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 120 }
-              NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 800 }
+              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: win.hitBloomIn; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: win.hitBloomOut; easing.type: Easing.InOutQuad }
             }
+            // The collapse releases the most energy: a slightly wider ring.
             ParallelAnimation {
-              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.8; duration: 900; easing.type: Easing.OutCubic }
-              NumberAnimation { target: win; property: "ringOpacity"; from: 0.7; to: 0; duration: 900; easing.type: Easing.OutQuad }
+              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.8; duration: win.ringDuration; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "ringOpacity"; from: 0.7; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
             }
           }
         }
@@ -1836,14 +1943,14 @@ Item {
         NumberAnimation { target: win; property: "symbolRise"; from: 0.35; to: 0; duration: 1000; easing.type: Easing.OutQuint }
         SequentialAnimation {
           PauseAnimation { duration: 550 }
-          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 350 }
-          NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 700 }
+          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 350; easing.type: Easing.InOutQuad }
+          NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: 700; easing.type: Easing.InOutQuad }
         }
         SequentialAnimation {
           PauseAnimation { duration: 950 }
           ParallelAnimation {
-            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: 900; easing.type: Easing.OutQuad }
+            NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+            NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
           }
         }
         SequentialAnimation {
@@ -1855,25 +1962,26 @@ Item {
       // 7 · Particles: light diamonds converge onto the silhouette, then it resolves.
       ParallelAnimation {
         id: particlesAnim
-        NumberAnimation { target: win; property: "particleOpacity"; from: 0; to: 1; duration: 150 }
+        NumberAnimation { target: win; property: "particleOpacity"; from: 0; to: 1; duration: 150; easing.type: Easing.OutCubic }
+        // A linear clock: each diamond eases along its own path from it.
         NumberAnimation { target: win; property: "particleT"; from: 0; to: 1; duration: 1050 }
         SequentialAnimation {
           PauseAnimation { duration: 950 }
           ParallelAnimation {
             NumberAnimation { target: win; property: "outerOpacity"; from: 0; to: 1; duration: 300; easing.type: Easing.OutCubic }
             NumberAnimation { target: win; property: "innerOpacity"; from: 0; to: 1; duration: 300; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "particleOpacity"; to: 0; duration: 380 }
+            NumberAnimation { target: win; property: "particleOpacity"; to: 0; duration: 380; easing.type: Easing.InQuad }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: 80 }
-              NumberAnimation { target: win; property: "flash"; to: 0; duration: 420 }
+              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: win.hitFlashIn }
+              NumberAnimation { target: win; property: "flash"; to: 0; duration: win.hitFlashOut; easing.type: Easing.OutCubic }
             }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 150 }
-              NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 750 }
+              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: win.hitBloomIn; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: win.hitBloomOut; easing.type: Easing.InOutQuad }
             }
             ParallelAnimation {
-              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-              NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: 900; easing.type: Easing.OutQuad }
+              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
             }
           }
         }
@@ -1883,31 +1991,33 @@ Item {
         }
       }
 
-      // 8 · Warp: drops out of hyperspace, zooming in past light streaks.
+      // 8 · Warp: drops out of hyperspace, zooming in past light streaks. The
+      // zoom decelerates hard but comes to rest on the landing (0.65s), not
+      // a long crawl before it.
       ParallelAnimation {
         id: warpAnim
         NumberAnimation { target: win; property: "warpT"; from: 0; to: 1; duration: 750; easing.type: Easing.OutQuad }
         SequentialAnimation {
-          NumberAnimation { target: win; property: "streakOpacity"; from: 0; to: 1; duration: 100 }
+          NumberAnimation { target: win; property: "streakOpacity"; from: 0; to: 1; duration: 100; easing.type: Easing.OutCubic }
           PauseAnimation { duration: 400 }
-          NumberAnimation { target: win; property: "streakOpacity"; to: 0; duration: 300 }
+          NumberAnimation { target: win; property: "streakOpacity"; to: 0; duration: 300; easing.type: Easing.InQuad }
         }
-        NumberAnimation { target: win; property: "symbolOpacity"; from: 0; to: 1; duration: 350 }
-        NumberAnimation { target: win; property: "symbolScale"; from: 3.2; to: 1; duration: 750; easing.type: Easing.OutExpo }
+        NumberAnimation { target: win; property: "symbolOpacity"; from: 0; to: 1; duration: 350; easing.type: Easing.OutCubic }
+        NumberAnimation { target: win; property: "symbolScale"; from: 3.2; to: 1; duration: 680; easing.type: Easing.OutQuart }
         SequentialAnimation {
           PauseAnimation { duration: 650 }
           ParallelAnimation {
             SequentialAnimation {
-              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: 70 }
-              NumberAnimation { target: win; property: "flash"; to: 0; duration: 420 }
+              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: win.hitFlashIn }
+              NumberAnimation { target: win; property: "flash"; to: 0; duration: win.hitFlashOut; easing.type: Easing.OutCubic }
             }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 150 }
-              NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 750 }
+              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: win.hitBloomIn; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: win.hitBloomOut; easing.type: Easing.InOutQuad }
             }
             ParallelAnimation {
-              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-              NumberAnimation { target: win; property: "ringOpacity"; from: 0.6; to: 0; duration: 900; easing.type: Easing.OutQuad }
+              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
             }
           }
         }
@@ -1917,26 +2027,28 @@ Item {
         }
       }
 
-      // 9 · Split: the two halves slide together and seal with a flash.
+      // 9 · Split: the two halves slide together and seal with a flash. A
+      // gentle ease-out keeps the closing gap visible through the cue's two
+      // blips (0.52, 0.61s), so they seal on its fifth at 0.70s.
       ParallelAnimation {
         id: splitAnim
-        NumberAnimation { target: win; property: "symbolOpacity"; from: 0; to: 1; duration: 300 }
-        NumberAnimation { target: win; property: "split"; from: 0.7; to: 0; duration: 750; easing.type: Easing.OutQuint }
+        NumberAnimation { target: win; property: "symbolOpacity"; from: 0; to: 1; duration: 300; easing.type: Easing.OutCubic }
+        NumberAnimation { target: win; property: "split"; from: 0.7; to: 0; duration: 700; easing.type: Easing.OutQuad }
         SequentialAnimation {
           PauseAnimation { duration: 700 }
           ScriptAction { script: win.halves = false }
           ParallelAnimation {
             SequentialAnimation {
-              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: 60 }
-              NumberAnimation { target: win; property: "flash"; to: 0; duration: 450 }
+              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.4; duration: win.hitFlashIn }
+              NumberAnimation { target: win; property: "flash"; to: 0; duration: win.hitFlashOut; easing.type: Easing.OutCubic }
             }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 120 }
-              NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 800 }
+              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: win.hitBloomIn; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: win.hitBloomOut; easing.type: Easing.InOutQuad }
             }
             ParallelAnimation {
-              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-              NumberAnimation { target: win; property: "ringOpacity"; from: 0.6; to: 0; duration: 900; easing.type: Easing.OutQuad }
+              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
             }
           }
         }
@@ -1964,16 +2076,16 @@ Item {
           ParallelAnimation {
             NumberAnimation { target: win; property: "pixOpacity"; from: 1; to: 0; duration: 320; easing.type: Easing.InOutQuad }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.35; duration: 70 }
-              NumberAnimation { target: win; property: "flash"; to: 0; duration: 450; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "flash"; from: 0; to: 0.35; duration: win.hitFlashIn }
+              NumberAnimation { target: win; property: "flash"; to: 0; duration: win.hitFlashOut; easing.type: Easing.OutCubic }
             }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: 150 }
-              NumberAnimation { target: win; property: "glowOpacity"; to: 0.55; duration: 800; easing.type: Easing.InOutQuad }
+              NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 1; duration: win.hitBloomIn; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "glowOpacity"; to: win.restGlow; duration: win.hitBloomOut; easing.type: Easing.InOutQuad }
             }
             ParallelAnimation {
-              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: 1.7; duration: 900; easing.type: Easing.OutCubic }
-              NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: 900; easing.type: Easing.OutQuad }
+              NumberAnimation { target: win; property: "ringScale"; from: 0.9; to: win.ringReach; duration: win.ringDuration; easing.type: Easing.OutCubic }
+              NumberAnimation { target: win; property: "ringOpacity"; from: 0.55; to: 0; duration: win.ringDuration; easing.type: Easing.OutQuad }
             }
           }
           ScriptAction { script: win.pixOn = false }
@@ -2006,27 +2118,35 @@ Item {
       // them, spins two turns and lands with a gold flash, rings and sheen.
       ParallelAnimation {
         id: legendaryAnim
-        // Sparks: burst (0-700), converge (550-1400), dissolve into the coin.
-        NumberAnimation { target: win; property: "sparkOpacity"; from: 0; to: 1; duration: 120 }
-        NumberAnimation { target: win; property: "burstT"; from: 0; to: 1; duration: 700; easing.type: Easing.Linear }
+        // Sparks: burst (200-900) on the cue's low strike, once the logo has
+        // begun to fall back, so the two don't compete; converge (650-1400)
+        // and dissolve into the coin. Both are linear clocks; each spark
+        // eases along its own path from them.
         SequentialAnimation {
-          PauseAnimation { duration: 550 }
-          NumberAnimation { target: win; property: "convergeT"; from: 0; to: 1; duration: 850; easing.type: Easing.Linear }
+          PauseAnimation { duration: 200 }
+          ParallelAnimation {
+            NumberAnimation { target: win; property: "sparkOpacity"; from: 0; to: 1; duration: 120; easing.type: Easing.OutCubic }
+            NumberAnimation { target: win; property: "burstT"; from: 0; to: 1; duration: 700; easing.type: Easing.Linear }
+          }
+        }
+        SequentialAnimation {
+          PauseAnimation { duration: 650 }
+          NumberAnimation { target: win; property: "convergeT"; from: 0; to: 1; duration: 750; easing.type: Easing.Linear }
         }
         SequentialAnimation {
           PauseAnimation { duration: 1300 }
           NumberAnimation { target: win; property: "sparkOpacity"; to: 0; duration: 380; easing.type: Easing.InQuad }
         }
         // Double orbit: accent-gold arcs inside, a wider gold pair outside.
-        NumberAnimation { target: win; property: "arcOpacity"; from: 0; to: 0.9; duration: 300 }
+        NumberAnimation { target: win; property: "arcOpacity"; from: 0; to: 0.9; duration: 300; easing.type: Easing.OutCubic }
         NumberAnimation { target: win; property: "arcT"; from: 0; to: 1; duration: 1350; easing.type: Easing.InOutCubic }
-        NumberAnimation { target: win; property: "arc2Opacity"; from: 0; to: 0.8; duration: 400 }
+        NumberAnimation { target: win; property: "arc2Opacity"; from: 0; to: 0.8; duration: 400; easing.type: Easing.OutCubic }
         NumberAnimation { target: win; property: "arc2T"; from: 0; to: 1; duration: 1500; easing.type: Easing.InOutCubic }
         SequentialAnimation {
           PauseAnimation { duration: 1250 }
           ParallelAnimation {
-            NumberAnimation { target: win; property: "arcOpacity"; to: 0; duration: 300 }
-            NumberAnimation { target: win; property: "arc2Opacity"; to: 0; duration: 450 }
+            NumberAnimation { target: win; property: "arcOpacity"; to: 0; duration: 300; easing.type: Easing.InQuad }
+            NumberAnimation { target: win; property: "arc2Opacity"; to: 0; duration: 450; easing.type: Easing.InQuad }
           }
         }
         // Coin: fades in face-on where the sparks landed, then spins down.
@@ -2037,7 +2157,7 @@ Item {
             NumberAnimation { target: win; property: "innerOpacity"; from: 0; to: 1; duration: 300; easing.type: Easing.OutCubic }
             NumberAnimation { target: win; property: "outerScale"; from: 0.9; to: 1; duration: 900; easing.type: Easing.OutQuint }
             NumberAnimation { target: win; property: "spinAngle"; from: 0; to: 720; duration: 1150; easing.type: Easing.OutCubic }
-            NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 0.6; duration: 500 }
+            NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 0.6; duration: 500; easing.type: Easing.OutCubic }
           }
         }
         // Landing: gold flash, bloom, two rings.
@@ -2049,7 +2169,7 @@ Item {
               NumberAnimation { target: win; property: "flash"; to: 0; duration: 650; easing.type: Easing.OutCubic }
             }
             SequentialAnimation {
-              NumberAnimation { target: win; property: "glowOpacity"; to: 1; duration: 140 }
+              NumberAnimation { target: win; property: "glowOpacity"; to: 1; duration: win.hitBloomIn; easing.type: Easing.OutCubic }
               NumberAnimation { target: win; property: "glowOpacity"; to: 0.65; duration: 900; easing.type: Easing.InOutQuad }
             }
             ParallelAnimation {
@@ -2084,7 +2204,7 @@ Item {
           NumberAnimation { target: win; property: "flash"; to: 0; duration: 320; easing.type: Easing.OutCubic }
         }
         SequentialAnimation {
-          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 0.9; duration: 190 }
+          NumberAnimation { target: win; property: "glowOpacity"; from: 0; to: 0.9; duration: 190; easing.type: Easing.OutCubic }
           NumberAnimation { target: win; property: "glowOpacity"; to: 0.5; duration: 400; easing.type: Easing.InOutQuad }
         }
         SequentialAnimation {
@@ -2104,12 +2224,13 @@ Item {
         }
       }
 
-      // Greeting, hold, then fade the whole stage out to the desktop.
+      // Greeting and hold, then the exit.
       SequentialAnimation {
         id: textTimeline
         PauseAnimation { duration: win.textDelay }
         ParallelAnimation {
-          NumberAnimation { target: win; property: "statusOpacity"; from: 0; to: 1; duration: 120 }
+          NumberAnimation { target: win; property: "statusOpacity"; from: 0; to: 1; duration: 120; easing.type: Easing.OutCubic }
+          // Linear: typing is a steady cadence, one character per tick.
           NumberAnimation { target: win; property: "typed"; from: 0; to: root.statusLine.length; duration: win.typeDuration }
         }
         PauseAnimation { duration: 80 }
@@ -2123,9 +2244,28 @@ Item {
           }
         }
         PauseAnimation { duration: win.holdDuration }
+        ScriptAction { script: exitTimeline.restart() }
+      }
+
+      // Greeting off: the symbol settles, holds a beat, then the same exit.
+      SequentialAnimation {
+        id: plainTimeline
+        PauseAnimation { duration: win.textDelay + win.plainHold }
+        ScriptAction { script: exitTimeline.restart() }
+      }
+
+      // Exit mirrors the entrance: the text, last in, leaves first (fading
+      // and settling back down, not with motion when calm), so the symbol
+      // is the last thing on screen as the stage gives way to the desktop.
+      SequentialAnimation {
+        id: exitTimeline
         ParallelAnimation {
           NumberAnimation { target: scene; property: "opacity"; to: 0; duration: 600; easing.type: Easing.InOutCubic }
           NumberAnimation { target: win; property: "symbolScale"; to: win.exitScale; duration: 600; easing.type: Easing.InCubic }
+          NumberAnimation { target: win; property: "statusOpacity"; to: 0; duration: 320; easing.type: Easing.InQuad }
+          NumberAnimation { target: win; property: "greetOpacity"; to: 0; duration: 320; easing.type: Easing.InQuad }
+          NumberAnimation { target: win; property: "telemetryOpacity"; to: 0; duration: 320; easing.type: Easing.InQuad }
+          NumberAnimation { target: win; property: "greetRise"; to: root.calm ? 0 : 0.4; duration: 320; easing.type: Easing.InCubic }
         }
         // Only the primary timeline can finish every monitor. Its pixels path
         // may start later while the image is sampled; a secondary must not cut
@@ -2133,9 +2273,20 @@ Item {
         ScriptAction { script: { if (win.primary || root.forceSecondary) root.finish() } }
       }
 
+      // Backdrop off: the lock's blurred wallpaper gives way to the live
+      // desktop right after release (a neutral view change: ease in and out),
+      // finished before the first sound hit so the symbol lands on the desktop.
+      NumberAnimation {
+        id: backdropFade
+        target: win; property: "backdropOpacity"
+        from: 1; to: 0
+        duration: 420; easing.type: Easing.InOutCubic
+      }
+
       SequentialAnimation {
         id: skipOut
-        NumberAnimation { target: scene; property: "opacity"; to: 0; duration: 160; easing.type: Easing.OutCubic }
+        // A dismissal: short, and easing in like any exit.
+        NumberAnimation { target: scene; property: "opacity"; to: 0; duration: 160; easing.type: Easing.InQuad }
         ScriptAction { script: root.finish() }
       }
     }

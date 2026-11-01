@@ -19,6 +19,7 @@ with tempfile.TemporaryDirectory(prefix="hello-lock-review-") as directory:
     shutil.copy2(source / "tests/preview.qml", root / "shell.qml")
     (root / "config/hello-lock").mkdir(parents=True)
     env = dict(os.environ, XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"),
-               HELLO_LOCK_SOURCE=str(source))
+               HELLO_LOCK_SOURCE=str(source),
+               HELLO_STATUS_WEATHER_CACHE=str(root / "cache/hello-lock/weather.json"))
     print("Preview root: " + str(root), flush=True)
     subprocess.run(["qs", "-p", str(root)], env=env, check=True)

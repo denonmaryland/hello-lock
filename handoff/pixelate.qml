@@ -1,14 +1,15 @@
 import QtQuick
 
-// Pixelate: the logo coarsens into ever bigger pixels and breaks up; the
-// symbol grows up from behind.
+// Pixelate: the logo coarsens into ever bigger pixels, each step a larger
+// jump than the last, and breaks up; the symbol grows up from behind.
 HandoffEffect {
   id: root
   property real fade: 1
   onResetting: { fade = 1 }
 
-  // Pixel size in steps, already coarse on the first frame.
-  readonly property var steps: [3, 6, 10, 16, 24, 34, 46]
+  // Pixel size in steps (a steady digital cadence, geometric growth), already
+  // coarse on the first frame.
+  readonly property var steps: [3, 5, 8, 12, 18, 26, 36, 48]
   readonly property int block: steps[Math.min(steps.length - 1, Math.floor(t * steps.length))]
 
   // The logo, drawn into a texture a fraction of its size and shown with
@@ -41,11 +42,12 @@ HandoffEffect {
   }
 
   timeline: ParallelAnimation {
-    NumberAnimation { target: root; property: "t"; from: 0; to: 0.999; duration: 600; easing.type: Easing.Linear }
+    // t is the step clock.
+    NumberAnimation { target: root; property: "t"; from: 0; to: 0.999; duration: 640; easing.type: Easing.Linear }
     SequentialAnimation {
-      PauseAnimation { duration: 300 }
-      NumberAnimation { target: root; property: "fade"; from: 1; to: 0; duration: 340; easing.type: Easing.InQuad }
+      PauseAnimation { duration: 260 }
+      NumberAnimation { target: root; property: "fade"; from: 1; to: 0; duration: 380; easing.type: Easing.BezierSpline; easing.bezierCurve: root.exitCurve }
     }
-    NumberAnimation { target: root; property: "emergeScale"; from: 0.85; to: 1; duration: 800; easing.type: Easing.OutCubic }
+    NumberAnimation { target: root; property: "emergeScale"; from: 0.88; to: 1; duration: root.emergeDuration; easing.type: Easing.BezierSpline; easing.bezierCurve: root.emergeCurve }
   }
 }

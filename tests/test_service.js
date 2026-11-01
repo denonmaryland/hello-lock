@@ -9,12 +9,17 @@ const source = fs.readFileSync(path.join(rootDir, 'Service.qml'), 'utf8');
 const presetScope = {};
 vm.createContext(presetScope);
 vm.runInContext(fs.readFileSync(path.join(rootDir, 'Presets.js'), 'utf8').replace('.pragma library', ''), presetScope);
+const typingSoundScope = {};
+vm.createContext(typingSoundScope);
+vm.runInContext(fs.readFileSync(path.join(rootDir, 'TypingSounds.js'), 'utf8').replace('.pragma library', ''), typingSoundScope);
 const methods = [...source.matchAll(/^  function (\w+)\(([^\n]*)\) \{\n([\s\S]*?)^  \}/gm)];
 function context() {
   const timer = () => ({running: false, stop() { this.running = false }, start() { this.running = true }, restart() { this.running = true }});
   const c = {
     console: {warn() {}, log() {}}, Date, Object, Math,
     Presets: presetScope, realUnlockSplash: false, userConfig: {}, lockBranding: {}, lastBrandingPreset: "", brandingRotationKey: "",
+    TypingSounds: typingSoundScope, typingSound: 'shuffle', lockTypingSound: 'pulse', typingSoundBag: [],
+    reducedMotion: false, typingSoundLoader: {item: null},
     passwordPamConfigured: true, config: {powerDown: false, sounds: false},
     typingEffect: 'cells', unlockTransition: false, unlockGateDone: false,
     builtinSymbolNames: ['radar', 'bolt', 'gear'], symbolBag: [], lockSymbol: '',
@@ -125,6 +130,98 @@ function context() {
   assert.equal(c.snapshotExpiry.running, true);
 }
 console.log('7 service regression scenarios passed (mock compositor; no real lock).');
+
+// Sound selection advances once per real lock; previews and repeated requests
+// cannot consume the bag. Muted/off/reduced/unlocking paths cannot play.
+{
+  const c = context();
+  c.beginLock();
+  const first = c.lockTypingSound;
+  const remaining = JSON.stringify(c.typingSoundBag);
+  c.beginLock();
+  assert.equal(c.lockTypingSound, first);
+  assert.equal(JSON.stringify(c.typingSoundBag), remaining);
+  const seen = new Set([first]);
+  for (let i = 0; i < 5; i++) { c.selectTypingSound(); seen.add(c.lockTypingSound) }
+  assert.equal(seen.size, 6, 'each patch before a repeat');
+  let previous = c.lockTypingSound;
+  for (let i = 0; i < 90; i++) {
+    c.selectTypingSound();
+    assert.notEqual(c.lockTypingSound, previous, 'no repeat across bag refills');
+    previous = c.lockTypingSound;
+  }
+  c.typingSound = 'phase'; c.selectTypingSound();
+  assert.equal(c.lockTypingSound, 'phase');
+  c.typingSound = 'off'; c.selectTypingSound();
+  assert.equal(c.lockTypingSound, 'phase');
+  assert.equal(typingSoundScope.normalize('../../bad'), 'shuffle');
+  for (const [old, current] of Object.entries({wood:'pulse', clay:'phase', rubber:'flux', felt:'grain', relay:'circuit', pluck:'drift'}))
+    assert.equal(typingSoundScope.normalize(old), current, 'preserve earlier saved choices');
+  let plays = 0;
+  c.typingSoundLoader.item = {play() { plays++ }};
+  c.playTypingSound(); assert.equal(plays, 0);
+  c.config.sounds = true;
+  c.typingSound = 'shuffle'; c.playTypingSound(); assert.equal(plays, 1);
+  for (const [key, value] of [['authenticatingPassword', true], ['unlockTransition', true],
+                             ['reducedMotion', true], ['lockRequested', false]]) {
+    const before = c[key]; c[key] = value;
+    c.playTypingSound(); assert.equal(plays, 1, key);
+    c[key] = before;
+  }
+  c.config.sounds = false; c.playTypingSound(); assert.equal(plays, 1);
+  c.config.sounds = true;
+  c.typingSoundLoader.item = {play() { throw Error('optional audio failure') }};
+  assert.doesNotThrow(() => c.playTypingSound());
+}
+
+// Exercise the actual edit handler: synchronized monitor fields and inactive
+// input never emit sound. The sound signal takes no password or key argument.
+{
+  const view = fs.readFileSync(path.join(rootDir, 'LockView.qml'), 'utf8');
+  const handler = view.match(/onTextEdited: \{([\s\S]*?)^            \}/m);
+  assert.ok(handler);
+  let pulses = 0;
+  const scope = {root: {syncingPasswordText: false, inputEnabled: true,
+    authenticatingPassword: false, unlocking: false,
+    typingSoundRequested(...args) { assert.equal(args.length, 0); pulses++ }}};
+  vm.createContext(scope);
+  vm.runInContext(`function edit() {${handler[1]}\n}`, scope);
+  scope.edit(); assert.equal(pulses, 1);
+  for (const [key, value] of [['syncingPasswordText', true], ['inputEnabled', false],
+                             ['authenticatingPassword', true], ['unlocking', true]]) {
+    const before = scope.root[key]; scope.root[key] = value;
+    scope.edit(); assert.equal(pulses, 1, key);
+    scope.root[key] = before;
+  }
+}
+
+// Bounded native playback: no queue, no stealing a ringing voice, no playback
+// on stale/missing policy, and no more than one sound per edit pulse.
+{
+  const audio = fs.readFileSync(path.join(rootDir, 'TypingSound.qml'), 'utf8');
+  const method = audio.match(/^  function play\(\) \{\n([\s\S]*?)^  \}/m);
+  let now = 1000, plays = 0;
+  const voices = Array.from({length: 3}, () => ({effect: {status: 2, playing: false,
+    play() { this.playing = true; plays++ }}}));
+  const c = {engaged: true, allowed: true, validFamily: true, volume: 0.5,
+    nextVoice: 0, lastTick: 0, policyValidUntil: 3000,
+    Date: {now: () => now}, SoundEffect: {Ready: 2},
+    voices: {count: 3, itemAt: i => voices[i]}};
+  vm.createContext(c); vm.runInContext(`function play() {${method[1]}\n}`, c);
+  assert.equal(c.play(), true);
+  now += 10; assert.equal(c.play(), false, 'auto-repeat rate limit');
+  now += 40; assert.equal(c.play(), true);
+  now += 50; assert.equal(c.play(), true);
+  now += 50; assert.equal(c.play(), false, 'all voices busy; drop instead of queue');
+  assert.equal(plays, 3);
+  voices.forEach(v => { v.effect.playing = false });
+  c.allowed = false; assert.equal(c.play(), false);
+  c.allowed = true; now = 4000; assert.equal(c.play(), false, 'expired policy');
+  c.policyValidUntil = 5000; c.volume = 0; assert.equal(c.play(), false);
+  c.volume = 0.5; voices.forEach(v => { v.effect.status = 3 });
+  assert.equal(c.play(), false, 'missing/failed WAVs');
+}
+console.log('Typing sound selection, edit isolation and bounded playback scenarios passed.');
 
 // Branding rotates once, stays separate from personal settings, and tolerates
 // removed/empty presets. No compositor or authentication is involved.

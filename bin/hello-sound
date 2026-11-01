@@ -4,6 +4,7 @@
 #   hello-sound <name>         play sounds/<name>.wav (respects mute, off switch, quiet hours)
 #   hello-sound --test <name>  play ignoring quiet hours (still respects mute + off switch)
 #   hello-sound --list         list available sound names
+#   hello-sound --policy       print current mute/quiet-hours policy as JSON
 #
 # Silent when: default sink is muted, ~/.config/hello-lock/sounds-off exists, or the
 # local hour is inside quiet hours (default 23:00-07:00).
@@ -79,6 +80,12 @@ play() {
 main() {
   local ignore_quiet=0 name=""
   case ${1:-} in
+    --policy)
+      load_conf
+      local enabled=true
+      if [[ -e $CONF_DIR/sounds-off ]] || in_quiet_hours || sink_muted; then enabled=false; fi
+      printf '{"enabled":%s,"volume":%s}\n' "$enabled" "$VOLUME"
+      return 0 ;;
     --list)
       local f
       for f in "$SOUND_DIR"/*.wav; do
@@ -106,7 +113,7 @@ main() {
 }
 
 case ${1:-} in
-  --list|-h|--help) main "$@" 2>/dev/null ;;
+  --policy|--list|-h|--help) main "$@" 2>/dev/null ;;
   *) main "$@" >/dev/null 2>&1 </dev/null ;;
 esac
 exit 0

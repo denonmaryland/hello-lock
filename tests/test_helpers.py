@@ -123,6 +123,12 @@ class Helpers(unittest.TestCase):
         self.assertEqual(next(self.cfg.parent.glob("config.json.bak.*")).read_text(), before)
         self.assertEqual(self.cfg.stat().st_mode & 0o777, 0o600)
 
+    def test_unlock_text_and_backdrop_settings_are_saved(self):
+        self.cfg.write_text('{"name":"A"}\n')
+        result = self.run_helper("hello-config", "save", '{"greeting":false,"unlockBackdrop":false}')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.cfg.read_text()), {"name": "A", "greeting": False, "unlockBackdrop": False})
+
     def test_handoff_setting_is_saved(self):
         self.cfg.write_text('{"name":"A"}\n')
         self.assertEqual(self.run_helper("hello-config", "save", '{"handoff":"glitch"}').returncode, 0)

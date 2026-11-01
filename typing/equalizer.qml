@@ -6,7 +6,8 @@ import QtQuick.Effects
 // kicks a few columns up, leaving accent peak caps that hold, then fall back
 // slowly. Idle, the bars rest as a steady, slightly uneven skyline and
 // nothing runs. Submit slams every bar to the top; failure drops the bars in
-// a fast cascade, the caps last. Reduced motion: even bars with plain fades.
+// a fast cascade, the caps last. Reduced motion: even bars built from twelve
+// rows that each fade on their own, so fast typing never pops.
 Item {
   id: root
 
@@ -21,8 +22,8 @@ Item {
   property color errorColor
 
   readonly property real baseOpacity: 0.22
-  readonly property real glowLevel: Math.max(0, Math.min(1, meanHeight)) * 0.9
-  readonly property bool busy: frames.running
+  readonly property real glowLevel: reducedMotion ? calmGlow : Math.max(0, Math.min(1, meanHeight)) * 0.9
+  readonly property bool busy: frames.running || calmTimer.running
 
   // Columns: about inkRect.width / 24 wide, a 1–2 px gap between them.
   readonly property int columns: 24
@@ -44,10 +45,6 @@ Item {
   property real sinceKey: 99
   property real slam: 0            // accent flash of the caps on submit
   property bool failing: false
-  // Reduced motion cross-fade between two even levels.
-  property real fadeFrom: 0
-  property real fadeTo: 0
-  property real fadeT: 1
   // Gap fill: the whole logo once submitted.
   property real fullness: 0
 
@@ -76,7 +73,7 @@ Item {
     ensure()
     if (mode !== "type") { mode = "type"; failing = false }
     sinceKey = 0
-    if (reducedMotion) { crossfade(level); return }
+    if (reducedMotion) return
     if (delta > 0) {
       // Kick three to five random columns, nudging their neighbours.
       var n = 3 + Math.floor(Math.random() * 3)
@@ -91,27 +88,28 @@ Item {
     wake()
   }
 
+  // Reduced motion: the rows follow `level` (the host's hold), nothing else.
   function submit() {
     ensure()
+    if (reducedMotion) return
     mode = "submit"
     failing = false
     clock = 0
-    if (reducedMotion) { crossfade(1); return }
     wake()
   }
 
   function fail() {
     ensure()
+    if (reducedMotion) return
     mode = "fail"
     failing = true
     clock = 0
-    if (reducedMotion) { crossfade(0); return }
     for (var i = 0; i < columns; i++) {
       v[i] = 0
       capV[i] = 0
       cap[i] = Math.max(cap[i], h[i])
       // Caps hang on until after their bar has gone.
-      capHold[i] = 0.22 + i * 0.012
+      capHold[i] = 0.1 + i * 0.006
     }
     wake()
   }
@@ -124,7 +122,6 @@ Item {
     sinceKey = 99
     slam = 0
     fullness = 0
-    fadeFrom = level; fadeTo = level; fadeT = 1
     for (var i = 0; i < columns; i++) {
       h[i] = restingHeight(i, level); v[i] = 0
       cap[i] = h[i]; capV[i] = 0; capHold[i] = 0
@@ -132,35 +129,15 @@ Item {
     paint()
   }
 
-  // Reduced motion: fade evenly from what is shown to a new level.
-  function crossfade(to) {
-    fadeFrom = fadeT < 0.5 ? fadeFrom : fadeTo
-    fadeTo = to
-    fadeT = 0
-    clock = 0
-    frames.running = true
-  }
-
   onLevelChanged: if (mode === "type" && !reducedMotion) wake()
   onColumnsChanged: reset()
+  onReducedMotionChanged: { reset(); calmTimer.restart() }
 
   function step(dt) {
     dt = Math.min(dt, 1 / 30)
     clock += dt
     now += dt
     sinceKey += dt
-
-    if (reducedMotion) {
-      var dur = mode === "fail" ? 0.45 : mode === "submit" ? 0.25 : 0.18
-      fadeT = Math.min(1, clock / dur)
-      fullness = mode === "submit" ? fadeT : mode === "fail" ? 0 : fullness
-      if (fadeT >= 1) {
-        if (mode === "fail") { mode = "type"; failing = false }
-        frames.running = false
-      }
-      paint()
-      return
-    }
 
     var settled = true
     // Typing shimmer: a little life in every column, gone ~1.2 s after a key.
@@ -170,7 +147,7 @@ Item {
     for (var i = 0; i < columns; i++) {
       if (mode === "fail") {
         // Fast cascade, left to right: each bar falls away under gravity.
-        var start = i * 0.018
+        var start = i * 0.012
         if (clock > start) {
           v[i] -= 22 * dt
           h[i] = Math.max(0, h[i] + v[i] * dt)
@@ -185,8 +162,9 @@ Item {
         var target = restingHeight(i, l)
         if (shimmer > 0 && l > 0)
           target = Math.max(0, Math.min(1, target + shimmer * Math.sin(now * (6 + (i * 7) % 5) + i * 1.7)))
-        // Underdamped spring back toward the skyline.
-        var k = 110, c = 2 * 0.5 * Math.sqrt(k)
+        // Underdamped spring back toward the skyline: retargets with its
+        // velocity intact, so fast typing flows instead of restarting.
+        var k = 150, c = 2 * 0.55 * Math.sqrt(k)
         v[i] += (k * (target - h[i]) - c * v[i]) * dt
         h[i] += v[i] * dt
         if (h[i] > 1) { h[i] = 1; v[i] = Math.min(0, v[i]) }
@@ -201,19 +179,22 @@ Item {
       } else if (capHold[i] > 0) {
         capHold[i] -= dt
       } else {
-        capV[i] += (mode === "fail" ? 9 : 1.4) * dt
+        capV[i] += (mode === "fail" ? 14 : 1.4) * dt
         cap[i] = Math.max(h[i], cap[i] - capV[i] * dt)
       }
       if (cap[i] > h[i] + 0.0005) settled = false
     }
 
     if (mode === "submit") {
-      slam = clock < 0.08 ? clock / 0.08 : Math.max(0, 1 - (clock - 0.08) / 0.45)
-      fullness = Math.min(1, Math.max(0, (clock - 0.08) / 0.2))
+      // Caps flash in fast, then decay; the gaps fill with an ease-out.
+      var fall = Math.max(0, 1 - (clock - 0.08) / 0.45)
+      slam = clock < 0.08 ? 1 - Math.pow(1 - clock / 0.08, 2) : fall * fall
+      var fill = Math.min(1, Math.max(0, (clock - 0.08) / 0.2))
+      fullness = 1 - Math.pow(1 - fill, 3)
       if (clock >= 0.55) { slam = 0; fullness = 1; frames.running = false }
     } else if (mode === "fail") {
       fullness = Math.max(0, fullness - dt / 0.08)
-      var done = clock > columns * 0.018 + 0.2
+      var done = clock > columns * 0.012 + 0.2
       for (var j = 0; j < columns && done; j++)
         if (h[j] > 0 || cap[j] > 0) done = false
       if (done) { mode = "type"; failing = false; frames.running = false }
@@ -230,20 +211,12 @@ Item {
     for (var i = 0; i < columns; i++) {
       var b = barRepeater.itemAt(i), p = capRepeater.itemAt(i)
       if (!b || !p) continue
-      if (reducedMotion) {
-        var lo = Math.min(fadeFrom, fadeTo), hi = Math.max(fadeFrom, fadeTo)
-        b.lit = lo; b.fadeLo = lo; b.fadeHi = hi
-        b.fadeOpacity = fadeTo > fadeFrom ? fadeT : 1 - fadeT
-        p.peak = 0; p.opacity = 0
-        sum += fadeFrom + (fadeTo - fadeFrom) * fadeT
-      } else {
-        b.lit = h[i]; b.fadeOpacity = 0
-        p.peak = cap[i]
-        // Caps show while they float above their bar, and flash on submit.
-        var sep = (cap[i] - h[i]) * inkH
-        p.opacity = Math.max(Math.min(1, sep / (capH * 1.5)), slam)
-        sum += h[i]
-      }
+      b.lit = h[i]
+      p.peak = cap[i]
+      // Caps show while they float above their bar, and flash on submit.
+      var sep = (cap[i] - h[i]) * inkH
+      p.opacity = reducedMotion ? 0 : Math.max(Math.min(1, sep / (capH * 1.5)), slam)
+      sum += h[i]
     }
     meanHeight = sum / columns
   }
@@ -274,12 +247,12 @@ Item {
       Item {
         required property int index
         property real lit: 0
-        property real fadeLo: 0
-        property real fadeHi: 0
-        property real fadeOpacity: 0
         readonly property real floor: root.inkRect.y + root.inkRect.height
         x: root.inkRect.x + index * root.pitch + root.gap / 2
         width: root.pitch - root.gap
+        // Opacity, not visible: a hidden layered parent may not repaint on
+        // a visibility flip.
+        opacity: root.reducedMotion ? 0 : 1
 
         Rectangle {
           width: parent.width
@@ -287,14 +260,69 @@ Item {
           height: parent.lit * root.inkH
           color: "white"
         }
-        // Reduced motion: the band between two levels, fading.
-        Rectangle {
-          width: parent.width
-          y: parent.floor - parent.fadeHi * root.inkH
-          height: (parent.fadeHi - parent.fadeLo) * root.inkH
-          color: "white"
-          opacity: parent.fadeOpacity
-        }
+      }
+    }
+
+    // Reduced motion: the even columns, cut by the fading rows.
+    MultiEffect {
+      anchors.fill: parent
+      opacity: root.reducedMotion ? 1 : 0
+      source: calmColumns
+      autoPaddingEnabled: false
+      maskEnabled: true
+      maskSource: calmRows
+      maskThresholdMin: 0.5
+      maskSpreadAtMin: 1
+    }
+  }
+
+  // Reduced motion: full-height columns (and the gap fill once submitted)...
+  Item {
+    id: calmColumns
+    anchors.fill: parent
+    visible: false
+    layer.enabled: true
+
+    Repeater {
+      model: root.columns
+      Rectangle {
+        required property int index
+        x: root.inkRect.x + index * root.pitch + root.gap / 2
+        y: root.inkRect.y
+        width: root.pitch - root.gap
+        height: root.inkRect.height
+        color: "white"
+      }
+    }
+    Rectangle {
+      x: root.inkRect.x; y: root.inkRect.y
+      width: root.inkRect.width; height: root.inkRect.height
+      color: "white"
+      opacity: root.reducedMotion && root.holding ? 1 : 0
+      Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
+    }
+  }
+
+  // ...shown through twelve rows from the bottom, each fading on its own.
+  // Behaviors retarget from the current opacity, so nothing pops.
+  Item {
+    id: calmRows
+    anchors.fill: parent
+    visible: false
+    layer.enabled: true
+
+    Repeater {
+      model: 12
+      Rectangle {
+        required property int index
+        readonly property real floor: root.inkRect.y + root.inkRect.height
+        x: root.inkRect.x
+        y: floor - Math.floor((index + 1) * root.inkRect.height / 12)
+        width: root.inkRect.width
+        height: Math.floor((index + 1) * root.inkRect.height / 12) - Math.floor(index * root.inkRect.height / 12)
+        color: "white"
+        opacity: root.reducedMotion ? Math.max(0, Math.min(1, root.level * 12 - index)) : 0
+        Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
       }
     }
   }
@@ -344,4 +372,15 @@ Item {
     colorizationColor: root.failing ? root.errorColor : root.accent
     brightness: 0.1
   }
+
+  // Reduced motion: glow eases with the level; busy while the rows fade.
+  property real calmGlow: reducedMotion ? level * 0.9 : 0
+  Behavior on calmGlow { NumberAnimation { duration: 240; easing.type: Easing.OutQuad } }
+  Connections {
+    target: root
+    enabled: root.reducedMotion
+    function onLevelChanged() { calmTimer.restart() }
+    function onHoldingChanged() { calmTimer.restart() }
+  }
+  Timer { id: calmTimer; interval: 300 }
 }

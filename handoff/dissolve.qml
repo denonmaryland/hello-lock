@@ -1,8 +1,9 @@
 import QtQuick
 import QtQuick.Effects
 
-// Dissolve: the logo blurs out and fades (a crossfade to a blurred copy, so
-// no blur is switched on mid-play); the symbol grows gently in.
+// Dissolve: the logo slips out of focus and blooms a little as it fades (a
+// crossfade to a blurred copy, so no blur is switched on mid-play); the
+// symbol grows gently in behind it.
 HandoffEffect {
   id: root
   property real blurMix: 0
@@ -39,9 +40,10 @@ HandoffEffect {
   }
 
   timeline: ParallelAnimation {
-    NumberAnimation { target: root; property: "blurMix"; from: 0; to: 1; duration: 450; easing.type: Easing.OutCubic }
-    NumberAnimation { target: root; property: "fade"; from: 1; to: 0; duration: 700; easing.type: Easing.InOutQuad }
-    NumberAnimation { target: root; property: "grow"; from: 1; to: 1.06; duration: 700; easing.type: Easing.OutCubic }
-    NumberAnimation { target: root; property: "emergeScale"; from: 0.9; to: 1; duration: 800; easing.type: Easing.OutCubic }
+    // Focus goes first and fast; the light lingers, then leaves.
+    NumberAnimation { target: root; property: "blurMix"; from: 0; to: 1; duration: 420; easing.type: Easing.BezierSpline; easing.bezierCurve: root.emergeCurve }
+    NumberAnimation { target: root; property: "fade"; from: 1; to: 0; duration: root.exitDuration; easing.type: Easing.BezierSpline; easing.bezierCurve: root.moveCurve }
+    NumberAnimation { target: root; property: "grow"; from: 1; to: 1.04; duration: root.exitDuration; easing.type: Easing.BezierSpline; easing.bezierCurve: root.exitCurve }
+    NumberAnimation { target: root; property: "emergeScale"; from: 0.92; to: 1; duration: root.emergeDuration; easing.type: Easing.BezierSpline; easing.bezierCurve: root.emergeCurve }
   }
 }

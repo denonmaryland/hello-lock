@@ -47,6 +47,16 @@ ShellRoot {
     handoff: preview.handoffSetting
   }
   Loader {
+    id: typingAudio
+    active: false
+    source: "plugin/TypingSound.qml"
+    onLoaded: {
+      item.pluginDir = Quickshell.env("HELLO_LOCK_SOURCE")
+      item.family = "pulse"
+      item.engaged = true
+    }
+  }
+  Loader {
     id: setup
     active: false
     source: "plugin/Onboarding.qml"
@@ -90,6 +100,26 @@ ShellRoot {
         wordmarkError: setup.item ? setup.item.wordmarkError : "",
         wordmarkPreview: setup.item ? setup.item.wordmarkPreview.slice(0, 30) : "",
         splash: splash.shown, calm: splash.calm})
+    }
+    // Local synthesized audio and pretend edit pulses only, no password IPC.
+    function sound(family: string): string {
+      timeout.restart()
+      typingAudio.active = true
+      if (typingAudio.item) typingAudio.item.family = family
+      return "ok"
+    }
+    function soundState(): string {
+      var i = typingAudio.item
+      return JSON.stringify({loaded: !!i, family: i ? i.family : "", ready: i ? i.readyVoices : 0,
+        allowed: i ? i.allowed : false, volume: i ? i.volume : 0})
+    }
+    function soundTap(): string {
+      timeout.restart()
+      return typingAudio.item && typingAudio.item.play() ? "played" : "silent"
+    }
+    function soundEngaged(on: bool): string {
+      if (typingAudio.item) typingAudio.item.engaged = on
+      return "ok"
     }
     function effect(name: string, count: int, reduced: bool): string {
       timeout.restart()
@@ -139,8 +169,14 @@ ShellRoot {
       splash.play(index, {awaySeconds: 3600, motion: reduced ? "reduced" : "full"})
       return "ok"
     }
+    // As unlock, with the greeting text and the backdrop switched per play.
+    function unlockWith(index: int, reduced: bool, greeting: bool, backdrop: bool): string {
+      timeout.restart(); preview.visible = false; setup.active = false
+      splash.play(index, {awaySeconds: 3600, motion: reduced ? "reduced" : "full", greeting: greeting, backdrop: backdrop})
+      return "ok"
+    }
     // Settings window with `config` (JSON) as the saved settings; `section`
-    // picks the sidebar page (0-6).
+    // picks the rail's page (0-7).
     function settings(config: string, section: int): string {
       timeout.restart(); preview.visible = false; splash.finish(); setup.active = false
       settings.active = false
@@ -168,6 +204,17 @@ ShellRoot {
       else if (key === "logo") i.chooseLogo(value)
       else if (key === "wordmark") { i.chooseLogo("wordmark"); i.wordmarkText = value; i.renderWordmark(true) }
       else i.save(JSON.parse("{\"" + key + "\":" + value + "}"))
+      return "ok"
+    }
+    // Runs a stage action on the open settings page (e.g. "play",
+    // "playTransition", "type", "clear", "playAll"; `arg` for "play" on the
+    // sound page). Pretend content only; sounds still go through hello-sound.
+    function settingsStage(action: string, arg: string): string {
+      if (!settings.item || !settings.item.currentStage) return "unavailable"
+      var stage = settings.item.currentStage
+      if (typeof stage[action] !== "function") return "unknown-action"
+      timeout.restart()
+      if (arg) stage[action](arg); else stage[action]()
       return "ok"
     }
     // LockView's unlock handoff (logo settles, the rest fades) without PAM.

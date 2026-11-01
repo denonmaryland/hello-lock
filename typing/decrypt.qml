@@ -58,8 +58,9 @@ Item {
   property real clock: 0
   property real burstSeed: 0
   property real flashKick: 0
+  // Retargeted per keystroke from the current value: no queue, no lag.
   property real resolvedEased: rankCount > 0 ? resolved / rankCount : 0
-  Behavior on resolvedEased { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+  Behavior on resolvedEased { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
   function shade(c, l, satBoost) {
     if (c.hslHue < 0) return Qt.hsla(0, 0, l, 1)
@@ -137,16 +138,17 @@ Item {
 
   function submit() {
     held = true
-    // Remaining slices lock in top to bottom over ~200 ms.
+    // Remaining slices lock in top to bottom: a 100 ms ripple of 170 ms
+    // moves, so the logo is whole ~270 ms after Enter.
     var pending = []
     for (var i = 0; i < slices.length; i++) {
       var s = sliceAt(i)
       if (s && s.rank >= resolved) pending.push(s)
     }
-    var step = pending.length > 1 ? 200 / (pending.length - 1) : 0
+    var step = pending.length > 1 ? 100 / (pending.length - 1) : 0
     for (var j = 0; j < pending.length; j++) pending[j].resolveIn(j * step, true)
     resolved = rankCount
-    extendBusy(200 + 420)
+    extendBusy(100 + 420)
     flashKickAnimation.restart()
   }
 
@@ -357,7 +359,7 @@ Item {
         // Sideways offset: rest scramble, typing jitter, failure burst.
         readonly property real offset: {
           if (root.reducedMotion) return 0
-          var d = baseDx * (1 - p) * (1 + 1.6 * root.burst)
+          var d = baseDx * (1 - p) * (1 + 1.1 * root.burst)
           if (open <= 0) return d
           var c = root.clock
           var j = 0
@@ -365,12 +367,12 @@ Item {
             var step = Math.floor(c * 11)
             var hop = root.hash(step * 1.7 + index * 13.1)
             j = 1.6 * Math.sin(c * 6.283 * modelData.w + modelData.ph)
-              + (hop > 0.82 ? (root.hash(step * 3.3 + index * 7.7) - 0.5) * root.amp * 0.45 : 0)
+              + (hop > 0.82 ? (root.hash(step * 3.3 + index * 7.7) - 0.5) * root.amp * 0.3 : 0)
             j *= root.jitter
           }
           if (root.burst > 0) {
             var bs = Math.floor(c * 22)
-            j += (root.hash(bs * 2.1 + index * 5.3 + root.burstSeed) - 0.5) * root.amp * 1.4 * root.burst
+            j += (root.hash(bs * 2.1 + index * 5.3 + root.burstSeed) - 0.5) * root.amp * root.burst
           }
           return d + j * open
         }
@@ -415,7 +417,7 @@ Item {
         function resolveIn(delay, fast) {
           scrambleAnimation.stop()
           resolvePause.duration = delay
-          resolveMove.duration = root.reducedMotion ? 200 : (fast ? 190 : 240)
+          resolveMove.duration = root.reducedMotion ? 200 : (fast ? 170 : 180)
           resolveAnimation.restart()
         }
         function scramble(delay) {
@@ -462,7 +464,8 @@ Item {
           PauseAnimation { id: scramblePause; duration: 0 }
           NumberAnimation {
             target: slice; property: "p"; to: 0
-            duration: root.reducedMotion ? 300 : 200
+            // Backspace answers at once (ease-out), quicker than a resolve.
+            duration: root.reducedMotion ? 200 : 160
             easing.type: Easing.OutCubic
           }
         }
@@ -482,25 +485,27 @@ Item {
     onTriggered: root.clock += frameTime
   }
 
-  // Unresolved slices wake on a keystroke and settle ~0.5 s after the last.
+  // Unresolved slices wake on a keystroke and settle ~0.3 s after the last.
   SequentialAnimation {
     id: jitterAnimation
     NumberAnimation { target: root; property: "jitter"; to: 1; duration: 120; easing.type: Easing.OutQuad }
-    PauseAnimation { duration: 420 }
-    NumberAnimation { target: root; property: "jitter"; to: 0; duration: 520; easing.type: Easing.InOutSine }
+    PauseAnimation { duration: 300 }
+    NumberAnimation { target: root; property: "jitter"; to: 0; duration: 400; easing.type: Easing.InOutSine }
   }
 
+  // Failure token: a ~0.5 s burst; the error tint keeps the host glitch's
+  // 50 / 220 / 180 ms timing so the two read as one event.
   NumberAnimation {
     id: burstAnimation
     target: root; property: "burst"; from: 1; to: 0
-    duration: 560; easing.type: Easing.OutCubic
+    duration: 480; easing.type: Easing.OutCubic
   }
 
   SequentialAnimation {
     id: errorAnimation
-    PropertyAction { target: root; property: "errorMix"; value: 1 }
-    PauseAnimation { duration: 300 }
-    NumberAnimation { target: root; property: "errorMix"; to: 0; duration: 260; easing.type: Easing.InOutSine }
+    NumberAnimation { target: root; property: "errorMix"; to: 1; duration: 50; easing.type: Easing.OutQuad }
+    PauseAnimation { duration: 220 }
+    NumberAnimation { target: root; property: "errorMix"; to: 0; duration: 180; easing.type: Easing.InOutQuad }
   }
 
   NumberAnimation {

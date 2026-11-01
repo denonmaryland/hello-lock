@@ -71,6 +71,11 @@ ShellRoot {
   function section(id: string): string {
    settings.item.sectionIndex = settings.item.sections.findIndex(function(s) { return s.id === id }); return "ok"
   }
+  function motion(mode: string, desktopReduced: bool): string {
+   settings.item.reducedMotion = desktopReduced
+   settings.item.motion = mode
+   return JSON.stringify({calm: settings.item.calm})
+  }
   function preset(action: string, value: string): string {
    settings.item.sectionIndex = settings.item.sections.findIndex(function(s) { return s.id === "presets" })
    settings.item.runPreset(action, value); return "ok"
@@ -249,6 +254,17 @@ class SettingsClose(unittest.TestCase):
         saved = self.edit_close("custom")
         self.assertEqual(saved["symbolParts"], ["one.svg", "two.svg"])
         self.assertNotIn("symbol", saved)
+
+    def test_motion_follows_desktop_unless_explicitly_overridden(self):
+        self.open()
+        for mode, desktop_reduced, expected in (
+            ("auto", False, False), ("auto", True, True),
+            ("full", True, False), ("reduced", False, True),
+            ("auto", False, False),
+        ):
+            with self.subTest(mode=mode, desktop_reduced=desktop_reduced):
+                state = json.loads(self.call("motion", mode, str(desktop_reduced).lower()))
+                self.assertEqual(state["calm"], expected)
 
     def test_failed_sound_write_keeps_settings_open(self):
         self.open()

@@ -1,32 +1,34 @@
 import QtQuick
 
-// Flip: the logo turns edge-on like a card; the symbol finishes the turn into
-// view.
+// Flip: one card turn carries the logo edge-on and the symbol on round into
+// view, so the two halves share a single, unbroken motion; the card dips back
+// a little as it turns.
 HandoffEffect {
   id: root
+  // 0..180 degrees: the logo's face until 90, the symbol's after.
   property real turn: 0
-  property real shrink: 1
-  onResetting: { turn = 0; shrink = 1 }
+  readonly property real dip: 1 - 0.05 * Math.sin(turn * Math.PI / 180)
+  onResetting: { turn = 0 }
+  onTurnChanged: {
+    if (!active) return
+    emergeTurn = turn < 90 ? -90 : turn - 180
+    emergeScale = dip
+  }
 
   Piece {
     effect: root
-    scale: root.shrink
-    opacity: root.turn < 89.5 ? 1 : 0
+    scale: root.dip
+    opacity: root.turn < 90 ? 1 : 0
     transform: Rotation {
       origin.x: root.sourceRect.width / 2
       origin.y: root.sourceRect.height / 2
       axis { x: 0; y: 1; z: 0 }
-      angle: root.turn
+      angle: Math.min(90, root.turn)
     }
   }
 
   timeline: ParallelAnimation {
-    NumberAnimation { target: root; property: "turn"; from: 0; to: 90; duration: 280; easing.type: Easing.Linear }
-    NumberAnimation { target: root; property: "shrink"; from: 1; to: 0.94; duration: 280; easing.type: Easing.OutQuad }
-    SequentialAnimation {
-      PropertyAction { target: root; property: "emergeTurn"; value: -90 }
-      PauseAnimation { duration: 280 }
-      NumberAnimation { target: root; property: "emergeTurn"; from: -90; to: 0; duration: 420; easing.type: Easing.OutCubic }
-    }
+    PropertyAction { target: root; property: "emergeTurn"; value: -90 }
+    NumberAnimation { target: root; property: "turn"; from: 0; to: 180; duration: 780; easing.type: Easing.BezierSpline; easing.bezierCurve: root.moveCurve }
   }
 }
