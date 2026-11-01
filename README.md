@@ -1,23 +1,98 @@
-# Hello Lock
+<div align="center">
 
-A lock screen for [Omarchy](https://omarchy.org) that greets you.
+<img src="docs/wordmark.svg" alt="Hello Lock" width="600">
 
-<p align="center">
-  <img src="docs/charge.gif" alt="Typing a password charges the logo cell by cell; a wrong one scatters it" width="720"><br>
-  <img src="docs/unlock-pixels.gif" alt="The pixels unlock: the symbol's pixels rain in and lock into place" width="360">
+<p><strong>Your name and logo on the lock screen, a power-down when you lock, and one of eleven power-on animations with a greeting every time you unlock.</strong><br>
+Built on Omarchy's own lock service, with the password path left untouched.</p>
+
+<p>
+<a href="https://omarchyplugins.com/"><img alt="Omarchy plugin" src="https://img.shields.io/badge/omarchy-plugin-7AA2F7?style=flat-square"></a>
+<img alt="PAM unchanged" src="https://img.shields.io/badge/password%20path-Omarchy's%2C%20unchanged-1E2330?style=flat-square">
+<img alt="11 unlocks" src="https://img.shields.io/badge/unlocks-11%20animations-1E2330?style=flat-square">
+<img alt="8 typing effects" src="https://img.shields.io/badge/typing-8%20effects-1E2330?style=flat-square">
+<a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-1E2330?style=flat-square"></a>
 </p>
 
-- **Your name and logo** on the lock screen, in your theme's colors.
-- **Several looks, one click apart.** Save a logo or wordmark with its unlock symbol as a [brand preset](#brand-presets), switch between presets, or have Hello Lock cycle or shuffle them each time you lock.
-- **It reacts as you type, your choice of eight ways.** By default the logo starts dim and lights up cell by cell with each character, fully lit at about 12. Pressing Enter fills the rest, so it's fully lit when the unlock takes over, and a wrong password breaks it apart. There are seven more [typing effects](#typing-effects), or *shuffle* for a different one each time you lock. They only follow how many characters you've typed, like the dots do, never what they are.
-- **A wrong password is handled calmly.** A short shake and `ACCESS DENIED · ATTEMPT 2` under the field. From the third try, one helpful hint: "Caps Lock is on", or which keyboard layout is active if you have several. A small `⇪ CAPS` badge shows whenever Caps Lock is on.
-- **Power-down on lock:** the screen collapses like an old CRT turning off. With several monitors it ripples across them.
-- **Power-on unlock:** one of eleven animations (coin, assemble, scan, glitch, heartbeat, orbit, monolith, particles, warp, split, pixels) with a typed status line and a greeting. They're shuffled, so you see all of them before any repeats. In *pixels*, your symbol's pixels rain in and lock into place; it works for any symbol, including your own image. With several monitors, the one you're using gets the full animation and the others a quieter fade.
-- **A handoff, not a cut:** at the unlock your logo stays where it was, then hands over to the symbol in one of fifteen [transitions](#transitions): it falls back, flips like a card, glitches out, folds in, collapses like an old TV, and more. They're shuffled too.
-- **Little touches:** a clock and date, battery and weather after unlocking, holiday and birthday greetings, a "you were away 2h 14m" line, low warm sounds, and a rare gold *legendary* unlock.
-- **Calm when you want it:** if you turn Hyprland's animations off, Hello Lock switches to gentle fades too (see `motion`).
+<img src="docs/charge.gif" alt="Typing a password charges the logo cell by cell; a wrong one scatters it" width="880">
+<br><br>
+<img src="docs/unlock-pixels.gif" alt="The pixels unlock: the symbol's pixels rain in and lock into place" width="420">
 
-You don't need to bring anything. Without a config it uses your account's name and the Omarchy logo.
+</div>
+
+<br>
+
+<table align="center">
+<tr>
+<td align="center" width="33%"><h3>Lock</h3>The screen collapses like an old CRT turning off. With several monitors it ripples across them. Your name, logo, clock and date wait on the other side, in your theme's colours.</td>
+<td align="center" width="33%"><h3>Type</h3>The logo reacts to every character, your choice of eight ways. A wrong password is handled calmly: a short shake, <code>ACCESS DENIED · ATTEMPT 2</code>, and a hint from the third try.</td>
+<td align="center" width="33%"><h3>Unlock</h3>One of eleven power-on animations, shuffled so you see them all, with a typed status line and a greeting. Your logo hands over to your unlock symbol in one of fifteen transitions.</td>
+</tr>
+</table>
+
+<br>
+
+## What you get
+
+<table>
+<tr>
+<td width="50%" valign="top"><strong>Your name and logo.</strong><br>Type a wordmark and pick one of eleven styles drawn live, bring an SVG or PNG, or keep the Omarchy logo. Everything tints to your theme.</td>
+<td width="50%" valign="top"><strong>Several looks, one click apart.</strong><br>Save a logo with its unlock symbol as a brand preset, switch between presets, or let Hello Lock cycle or shuffle them each time you lock.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><strong>Forty unlock symbols, or your own.</strong><br>A console insignia family drawn for Hello Lock in five rows (System, Security, Signal, Space, Rank), the Omarchy symbol, your logo, or any image. The pixels unlock works for all of them.</td>
+<td width="50%" valign="top"><strong>Little touches.</strong><br>Battery and weather after unlocking, holiday and birthday greetings, a "you were away 2h 14m" line, six restrained synth typing sounds, and a rare gold <em>legendary</em> unlock.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><strong>Calm when you want it.</strong><br>Turn the greeting text, the blurred backdrop or both off, and the symbol animates straight over your desktop. Turn Hyprland's animations off and Hello Lock switches to gentle fades too.</td>
+<td width="50%" valign="top"><strong>Safe by design.</strong><br>Password checking is Omarchy's code, line for line. The animation starts only after PAM says yes and can never block the unlock. Weather is the only thing that goes online, and it is one switch away from off.</td>
+</tr>
+</table>
+
+<div align="center">
+<img src="docs/typing-effects.gif" alt="All eight typing effects, mid-typing: cells, scanline, liquid, decrypt, equalizer, sweep, pulse, off" width="880">
+<br><br>
+<img src="docs/onboarding.gif" alt="The setup screen: typing a wordmark, trying styles, picking an unlock symbol" width="720">
+</div>
+
+## Install
+
+```bash
+omarchy plugin add https://github.com/denonmaryland/hello-lock.git --enable
+omarchy restart shell
+```
+
+After the restart, a short setup opens and asks five things: your name, your birthday, your logo, your unlock symbol and how it reacts as you type. You don't need to bring anything; without a config it uses your account's name and the Omarchy logo. Afterwards, open the settings from the Omarchy menu under **Style → Lock Screen** (the setup offers to add it) or with `omarchy-shell lock settings`.
+
+Hello Lock replaces Omarchy's built-in lock screen; enabling it switches the stock one off. Your password checking is the same PAM code Omarchy uses. Lock services only load on a shell restart, hence the second command.
+
+Try it without locking:
+
+```bash
+omarchy-shell lock preview                  # the lock screen (click to close)
+omarchy-shell lock splashPreview            # a random unlock animation
+omarchy-shell lock splashPreviewVariant 3   # a specific one: 0-10 (10 = pixels), 11 = legendary
+omarchy-shell lock splashPreviewSymbol radar 10   # try a built-in symbol without changing your config
+omarchy-shell lock previewTypingEffect liquid     # then: omarchy-shell lock preview, and type with
+omarchy-shell lock previewType 6                  #   previewType N, previewSubmit, previewFailure
+```
+
+<details>
+<summary><strong>Uninstall</strong></summary>
+<br>
+
+```bash
+~/.config/omarchy/plugins/hello-lock/bin/hello-menu remove   # only if you added the menu entry
+omarchy plugin remove hello-lock
+omarchy restart shell
+```
+
+Omarchy's stock lock screen comes back. If you skip the first line, the **Style → Lock Screen** entry simply stops showing once Hello Lock is gone; you can delete its line from `~/.config/omarchy/extensions/omarchy-menu.jsonc` whenever you like.
+
+</details>
+
+<br>
+
+# The details
 
 ## Setup
 
@@ -68,7 +143,7 @@ omarchy-shell lock settings
 
 <p align="center"><img src="docs/settings.png" alt="The settings window: a sidebar of sections and the unlock symbol grid" width="720"></p>
 
-Every option is on one page, grouped in a sidebar: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol, the gold unlock and the transition), **Typing**, **Lock screen** (clock, power-down, motion), **Sound** (on/off, volume, quiet hours), **Presets** (saved looks and rotation) and **Weather**. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. **Play unlock** and **Preview** show the result without locking. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections.
+An icon rail on the left holds eight sections: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol, the gold unlock, greeting, background and the transition), **Typing**, **Lock screen** (clock, power-down, motion, the menu entry), **Sound** (on/off, typing sound, volume, quiet hours), **Presets** (saved looks and rotation) and **Weather**. Each section's settings sit beside a **live preview** of what they change: the greeting as you type your name, your logo on a miniature lock screen, the unlock symbol and its transition (the real transition file, played in place), the real typing effect driven by pretend keystrokes, the CRT power-down as a storyboard, every sound cue with its waveform (**Play** runs the sound helper once per click), your presets as a carousel, and where the weather appears. The previews draw sample text only, make no network requests, and stop when hidden. The full-screen button and **Preview on the lock screen** still open the real previews. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections. On screens smaller than the window it scales down to fit, and long sections scroll.
 
 A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows as **Custom**. If you try a built-in symbol, you can switch back to Custom until you close the window.
 
@@ -112,29 +187,9 @@ before running a preset operation.
 
 If you edit `config.json` by hand and a preset entry is malformed, Hello Lock skips it on the lock screen and in Settings without touching your other settings, and the preset commands refuse to save until it is fixed.
 
-## Install
-
-```bash
-omarchy plugin add https://github.com/denonmaryland/hello-lock.git --enable
-omarchy restart shell
-```
-
-After the restart, a short setup opens. Afterwards, open the settings from the Omarchy menu under **Style → Lock Screen** (the setup offers to add it) or with `omarchy-shell lock settings`.
-
-Hello Lock replaces Omarchy's built-in lock screen; enabling it switches the stock one off. Your password checking is the same PAM code Omarchy uses. Lock services only load on a shell restart, hence the second command.
-
-Try it without locking:
-
-```bash
-omarchy-shell lock preview                  # the lock screen (click to close)
-omarchy-shell lock splashPreview            # a random unlock animation
-omarchy-shell lock splashPreviewVariant 3   # a specific one: 0-10 (10 = pixels), 11 = legendary
-omarchy-shell lock splashPreviewSymbol radar 10   # try a built-in symbol without changing your config
-omarchy-shell lock previewTypingEffect liquid     # then: omarchy-shell lock preview, and type with
-omarchy-shell lock previewType 6                  #   previewType N, previewSubmit, previewFailure
-```
-
-## Make it yours
+<details>
+<summary><strong>Every setting in config.json</strong></summary>
+<br>
 
 Create `~/.config/hello-lock/config.json`. Every field is optional, and changes apply on the next lock:
 
@@ -157,10 +212,13 @@ Create `~/.config/hello-lock/config.json`. Every field is optional, and changes 
 | `symbolParts` | `[]` | Advanced: two images (outer, inner) on the same canvas, animated separately in the "assemble" animation. |
 | `tintLogo` | `true` | Recolor the logo and symbol to your theme. Set `false` to keep a colored logo's own colors. |
 | `birthday` | `""` | `"MM-DD"` for a birthday greeting. |
-| `sounds` | `true` | Lock/unlock sounds. They're silent when your output is muted and during quiet hours (23:00–07:00). |
+| `sounds` | `true` | Lock, typing, unlock and wrong-password sounds. They're silent when your output is muted and during quiet hours (23:00–07:00). |
+| `typingSound` | `"shuffle"` | `shuffle`, `pulse`, `phase`, `flux`, `grain`, `drift`, `circuit` or `off`. Shuffle uses every set before repeating and chooses once per real lock. Typing sounds are silent with reduced motion. Earlier development names are accepted as aliases. |
 | `weather` | `true` | Shows weather after unlocking, from [wttr.in](https://wttr.in), the same service as Omarchy's weather widget. This sends a request from your IP at most every 30 minutes (see [Why it's safe](#why-its-safe)). |
 | `powerDown` | `true` | The CRT shut-off on lock. It briefly screenshots your screen to `$XDG_RUNTIME_DIR` (RAM, user-only) and deletes it after. |
 | `legendary` | `true` | The 2% gold unlock. |
+| `greeting` | `true` | The typed status line, the greeting and the weather/battery line after an unlock. `false` plays just the symbol. |
+| `unlockBackdrop` | `true` | The blurred backdrop behind the unlock animation. `false` fades it away right after you unlock, so the symbol plays over your desktop and the windows you had open. |
 | `clock` | `true` | The clock and date on the lock screen. |
 | `typingEffect` | `"cells"` | What the logo does while you type: `"cells"`, `"scanline"`, `"liquid"`, `"decrypt"`, `"equalizer"`, `"sweep"`, `"pulse"`, `"off"`, or `"shuffle"` for a different one each lock (see [Typing effects](#typing-effects)). |
 | `handoff` | `"shuffle"` | How the logo hands over to the symbol at unlock: `"fallback"`, `"liftoff"`, `"slide"`, `"flip"`, `"dissolve"`, `"split"`, `"blinds"`, `"scatter"`, `"wipe"`, `"glitch"`, `"poweroff"`, `"flythrough"`, `"fold"`, `"drop"`, `"pixelate"`, or `"shuffle"` (see [Transitions](#transitions)). |
@@ -179,7 +237,21 @@ omarchy-shell lock configJson
 
 Sound volume and quiet hours: create `~/.config/hello-lock/sound.conf` with `VOLUME=0.5`, `QUIET_START=23` and `QUIET_END=7` (leave a value empty to turn quiet hours off). An empty file named `sounds-off` in the same folder mutes everything.
 
-## Check your setup
+Typing sounds use optional Qt Multimedia playback with three preloaded voices;
+rapid repeats are dropped rather than queued. User edits (including backspace)
+make one tap; pasting makes one tap rather than one per character. Programmatic
+clears and mirrored fields on other monitors stay silent. No key identity or
+password content reaches the player. Volume, quiet hours and the off marker are
+checked independently of typing, once per second while input is active. System
+mute also applies directly to the audio output. Missing Qt Multimedia or sample
+files leave typing silent and do not affect authentication. Sound design,
+generation and a listening-preview command are in [sounds/README.md](sounds/README.md).
+
+</details>
+
+<details>
+<summary><strong>Check your setup</strong></summary>
+<br>
 
 ```bash
 ~/.config/omarchy/plugins/hello-lock/bin/hello-lock-doctor
@@ -189,7 +261,11 @@ It checks that Hello Lock is installed, enabled and loaded, that the stock lock 
 
 It only reads; it changes nothing. It doesn't go online unless you add `--online`, which tests reaching wttr.in. `--json` prints machine-readable output, and `--config PATH` checks another config file. It exits 0 when all is good, 1 on warnings and 2 on problems. `bin/hello-config doctor` runs the same thing.
 
-## Why it's safe
+</details>
+
+<details>
+<summary><strong>Why it's safe: what Hello Lock changes and what it doesn't</strong></summary>
+<br>
 
 A lock screen has one job, so here is exactly what Hello Lock changes and what it doesn't.
 
@@ -206,6 +282,8 @@ The lock doesn't wait for capture. Files are removed after all monitors finish t
 **Weather is the only thing that goes online.** `bin/hello-status` asks [wttr.in](https://wttr.in) for the temperature and conditions, with `curl`. It sends your weather location from Omarchy's weather settings (coordinates or a place name; if you haven't set one, wttr.in guesses from your IP) and whether you want °C or °F. wttr.in sees your IP. It asks when the shell starts and when you lock, but the answer is cached for 30 minutes in `~/.cache/hello-lock/weather.json`, so that's at most one request per 30 minutes (plus a retry when a request fails). Set `"weather": false` and Hello Lock makes no network requests at all. Nothing else in Hello Lock connects to the network.
 
 **Everything else is local.** The rest of the status line comes from your own machine: the battery from `/sys/class/power_supply`, the update count from the package database the Omarchy bar already downloaded (counted offline; nothing is downloaded), and greetings from the date and your `birthday`. Sounds are WAV files in the plugin folder, played with `pw-play` or `paplay`.
+
+</details>
 
 ## Typing effects
 
@@ -250,7 +328,9 @@ When you unlock, your logo doesn't just vanish: it stays put while the lock rele
 
 There's no choice to make in setup; to pin one, pick it in Settings → Unlock → Transition (or set `handoff`). They play alongside the unlock animation on the screen you're using. Other screens, and reduced motion, get a plain crossfade. Each transition is one QML file in `handoff/` following the contract in [`handoff/README.md`](handoff/README.md); if one fails to load, the logo simply falls back.
 
-## Wordmark styles
+<details>
+<summary><strong>Wordmark styles</strong></summary>
+<br>
 
 `omarchy` (the Omarchy logo's font, letters only), `blocks`, `outline`, `scanline` (CRT stripes), `led` (dot matrix), `tiles` (mosaic), `split` (stencil cut), `italic`, `wide`, `glitch` and `shadow` (pixel drop-shadow). Every style is a single-colour silhouette, so it tints to your theme and works in every unlock animation. You can also render one yourself:
 
@@ -258,35 +338,37 @@ There's no choice to make in setup; to pin one, pick it in Settings → Unlock �
 ~/.config/omarchy/plugins/hello-lock/bin/hello-wordmark "ADA 42" ~/.config/hello-lock/wordmark.svg --style led
 ```
 
-## Uninstall
+</details>
 
-```bash
-~/.config/omarchy/plugins/hello-lock/bin/hello-menu remove   # only if you added the menu entry
-omarchy plugin remove hello-lock
-omarchy restart shell
-```
-
-Omarchy's stock lock screen comes back. If you skip the first line, the **Style → Lock Screen** entry simply stops showing once Hello Lock is gone; you can delete its line from `~/.config/omarchy/extensions/omarchy-menu.jsonc` whenever you like.
-
-## Notes
+<details>
+<summary><strong>Notes</strong></summary>
+<br>
 
 - What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 - Hello Lock is a copy of Omarchy's lock service with the visuals added on top. If Omarchy fixes something in its own lock screen, that fix won't reach Hello Lock until Hello Lock is updated.
 - The multi-monitor timing (power-down ripple, quieter unlock on other screens) is built for several monitors but so far has only been tested on a single laptop screen.
-- Requires Omarchy's Quickshell-based shell. It uses `grim` (power-down effect), `pw-play` or `paplay` (sounds) and `python3` (status line), which ship with Omarchy.
+- Requires Omarchy's Quickshell-based shell. It uses `grim` (power-down effect), `pw-play` or `paplay` (lock/unlock sounds) and `python3` (status line), which ship with Omarchy. Optional typing sounds use the `QtMultimedia` QML module (`qt6-multimedia` on Arch); they stay silent when it is unavailable.
 
-## Credits
+</details>
+
+<details>
+<summary><strong>Credits</strong></summary>
+<br>
 
 - Built on Omarchy's lock screen plugin (MIT, © David Heinemeier Hansson).
 - The **Omarchy** wordmark style uses the FIGlet font **Delta Corps Priest 1 by CoSMiC cHiLD**, created with [patorjk.com's FIGFont Editor](http://patorjk.com/figfont-editor) and the font Omarchy's logo is drawn from (`wordmark/delta-corps-priest-1.flf`, unmodified, with its author header). Thank you, CoSMiC cHiLD.
 - The `@omarchy` unlock symbol is traced from Omarchy's own icon (`/usr/share/omarchy/icon.txt`, MIT). The other built-in symbols are original pixel art drawn for this project. Their grids live in `symbols/build.py`.
 - The other wordmark styles use *Hello Blocks* (`wordmark/glyphs.py`), an original A–Z/0–9 pixel alphabet drawn for this project, rendered by `bin/hello-wordmark`.
 - Fonts: [Oxanium](https://fonts.google.com/specimen/Oxanium) and [Share Tech Mono](https://fonts.google.com/specimen/Share+Tech+Mono), SIL Open Font License 1.1.
-- Sounds are synthesized with ffmpeg by `sounds/generate.sh` and are part of this project.
+- Lock, unlock and wrong-password cues are synthesized by `sounds/generate-cues.py`, and typing sounds by `sounds/generate-typing.py`, both with Python's standard library. No sampled or downloaded audio is used; both packs are part of this project. `sounds/peaks.py` precomputes the waveforms Settings draws (`settings/SoundPeaks.js`).
 
 MIT License; see [LICENSE](LICENSE). Third-party licenses and credits: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Development checks
+</details>
+
+<details>
+<summary><strong>Development checks</strong></summary>
+<br>
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -299,7 +381,10 @@ The tests use disposable settings and a fake compositor. The preview launcher
 prints a temporary path; control it using `qs ipc -p PATH call review status`,
 `effect cells 6 false`, `submit`, `failure`, `unlocking true`, `onboarding`,
 `wordmark ADA led`, `unlock 10 true`, `hide`, or `quit`. Each command follows
-`call review`.
+`call review`. `settings '{"name":"Ada"}' 2` opens Settings on a section (0–7)
+with that config; `settingsSection N`, `settingsSet KEY VALUE` and
+`settingsState` drive it, and `settingsStage ACTION [ARG]` runs a preview action
+(`play`, `playUnlock`, `playTransition`, `type`, `clear`, `playAll`).
 `logo PATH`, `fullscreen true` and `prime` check the unlock handoff: the lock
 view's settled frame should match the primed splash pixel for pixel.
 It loads the actual visual components with installed Omarchy theme modules,
@@ -314,3 +399,11 @@ The settings-close regression check requires a running Wayland desktop. It uses
 disposable settings and Settings.qml only to check debounced writes before close
 or setup, reopening, custom-symbol restoration, and failed-write behavior. It does
 not load the lock service or exercise native mouse interactions.
+
+</details>
+
+<br>
+
+<div align="center">
+<sub>MIT licensed · built on <a href="https://omarchy.org">Omarchy</a>'s lock screen · made by <a href="https://github.com/denonmaryland">denonmaryland</a></sub>
+</div>
