@@ -5,7 +5,20 @@ branding does not imply support for GNOME, KDE, X11 or another compositor.
 Packages install files and a PAM policy; they do not enable an idle service,
 edit compositor configuration or replace an existing locker automatically.
 
-Build a local preview from this checkout, without root:
+## Download the tested preview
+
+[Standalone technical preview 1](https://github.com/denonmaryland/hello-lock/releases/tag/standalone-preview-1)
+provides the exact reviewed Arch/CachyOS package, Fedora RPM, experimental
+Debian-format package and staging tarball, with SHA256SUMS and setup guidance.
+The native package version is `0.5.3-0.preview1`; it is separate from the
+Omarchy plugin version. Debian/Ubuntu runtime remains unverified. Download
+SHA256SUMS beside the chosen artifact and verify it before installation:
+
+```sh
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+Build the same native preview version locally, without root:
 
 ```sh
 ./bin/hello-lock-package --format arch --version 0.5.3 --release 0.preview1 --output-dir /absolute/output
@@ -14,8 +27,8 @@ Build a local preview from this checkout, without root:
 ./bin/hello-lock-package --format tar --version 0.5.3 --release 0.preview1 --output-dir /absolute/output
 ```
 
-The example version identifies a local candidate, not a published release.
-The Omarchy manifest is unchanged. Output names are never overwritten. Each
+The example native version identifies the technical preview, independently of
+the Omarchy manifest version. Output names are never overwritten. Each
 artifact has a SHA-256 sidecar; installed files include BUILD-MANIFEST.json.
 The source allowlist excludes Git metadata, private guides, runtime data,
 personal settings and screenshots. Arch uses zstd; RPM requires rpmbuild.

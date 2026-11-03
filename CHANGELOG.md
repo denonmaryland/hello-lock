@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-11-03
 
 - Add explicit standalone idle/logind integration through swayidle, a suspend
   command that aborts unless lock readiness is confirmed, and an opt-in managed

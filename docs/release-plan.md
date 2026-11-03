@@ -1,8 +1,8 @@
 # Release preparation
 
 Prepared 2026-11-03 as a local review plan. The owner subsequently authorized
-committing and pushing the reviewed work. Release versions, tags, marketplace
-requests and distribution uploads still require separate authorization.
+committing and pushing the reviewed work. The owner subsequently authorized distribution, including release tags, native
+preview uploads and the Omarchy update request.
 
 ## Separate release paths
 
@@ -15,13 +15,14 @@ requests and distribution uploads still require separate authorization.
    `e1dd95d` base, synchronize the same recovery change, then add instant unlock,
    overlay timing, explicit Settings reload, shared visual tokens, focused-screen
    adapter, asset provenance and helper compatibility. This layer retains the
-   existing plugin ID and Omarchy contexts. The next plugin feature version is
-   undecided; do not silently label it 0.5.4 or reuse a reviewed marketplace SHA.
+   existing plugin ID and Omarchy contexts. This feature release is 0.6.0, separate from the prepared 0.5.4 hotfix.
+   Do not reuse a previously reviewed marketplace SHA.
 3. **Standalone runtime and native preview packages.** Add the independent host,
    PAM supervisor, optional extras, idle/capture and packaging helpers, plus
    standalone regressions. Preserve a separate configuration profile. Local
    `0.5.3-0.preview1` artifact naming identifies the reviewed technical preview,
-   not a public plugin release or distribution repository package.
+   not the Omarchy plugin version or a distribution repository package.
+   The same exact tested files are distributed as standalone-preview-1.
 4. **Disposable test infrastructure.** Add VM profiles, authentication fixtures,
    signed-image/installer paths, result validation and source-boundary tests.
    These are development tools, excluded from native application payloads.

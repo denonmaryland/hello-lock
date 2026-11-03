@@ -35,8 +35,8 @@ Do not infer the Omarchy plugin's fingerprint behavior for the standalone host.
 [Standalone setup](standalone.md) documents source/user installation, the
 separate explicit managed PAM setup, configuration and previews.
 [Packaging](packaging.md) documents local native preview package builds,
-dependencies, installation and removal. Preview packages have not been
-published to distribution repositories; there is no official remote installer.
+dependencies, installation and removal. Preview packages are available as [GitHub release assets](https://github.com/denonmaryland/hello-lock/releases/tag/standalone-preview-1),
+not distribution repository packages. There is no remote shell installer.
 
 Start with Settings/visual previews and `hello-lock doctor`. Real locking
 requires a supported compositor and the exact managed PAM policy. Hyprland

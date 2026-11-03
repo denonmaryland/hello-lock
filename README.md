@@ -56,6 +56,9 @@ Built on Omarchy's own lock service, with the password path left untouched.</p>
 
 ## Standalone technical preview
 
+**[Download standalone technical preview 1](https://github.com/denonmaryland/hello-lock/releases/tag/standalone-preview-1)** ·
+[Setup and removal](docs/standalone.md) · [Tested configurations](docs/support.md)
+
 [![Watch the standalone preview demo](docs/standalone-demo.png)](docs/standalone-demo.mp4)
 
 A 45-second visual demo: Omarchy first, then the standalone Studio and custom
