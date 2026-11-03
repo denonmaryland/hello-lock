@@ -3,7 +3,7 @@
 Review date: 2026-11-02 (Pacific). Candidate: local `0.5.3-0.preview1` packages.
 This is an internal engineering review, not an independent security audit or a
 published release. No owner desktop configuration, live PAM policy or running
-plugin was changed. No commit, push, tag or marketplace submission is included.
+plugin was changed. This review did not include a commit, push, tag or marketplace submission.
 
 ## Scope
 

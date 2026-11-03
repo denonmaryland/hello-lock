@@ -6,7 +6,7 @@ or security certification. No external reviewer was contacted.
 
 Reviewed runtime payload SHA-256:
 `df0aea3ac37bbf4ee913579859851421872c01522f5c06a24f956d04293032a4`.
-The payload remains uncommitted and unpublished. Scope: standalone supervisor,
+The review used an uncommitted, unpublished candidate. Scope: standalone supervisor,
 QML lock/PAM core, idle and capture helpers, PAM/user/unit installers, package
 construction, standalone tests, VM fixture structure and release documentation.
 The reviewer did not rerun the full VM matrix or review the complete Omarchy

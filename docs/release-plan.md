@@ -1,7 +1,8 @@
 # Release preparation
 
-Prepared 2026-11-03. All work remains local; no release version, commit, tag,
-push, marketplace request or distribution upload is authorized by this plan.
+Prepared 2026-11-03 as a local review plan. The owner subsequently authorized
+committing and pushing the reviewed work. Release versions, tags, marketplace
+requests and distribution uploads still require separate authorization.
 
 ## Separate release paths
 

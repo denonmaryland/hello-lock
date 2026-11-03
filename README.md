@@ -56,6 +56,12 @@ Built on Omarchy's own lock service, with the password path left untouched.</p>
 
 ## Standalone technical preview
 
+[![Watch the standalone preview demo](docs/standalone-demo.png)](docs/standalone-demo.mp4)
+
+A 45-second visual demo: Omarchy first, then the standalone Studio and custom
+wordmarks, images, symbols and presets. These are real visual previews;
+authentication was tested separately in disposable VMs.
+
 Settings and visual previews can now run independently of Omarchy from this
 checkout: `./bin/hello-lock settings`. An experimental standalone password
 locker now supports Hyprland and Sway, with explicit PAM setup and autonomous
