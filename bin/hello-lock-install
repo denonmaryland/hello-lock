@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Install/remove this user's standalone files. PAM setup is a separate root action."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import sys
+import tempfile
+
+MARKER = '.hello-lock-install.json'
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def manifest(target):
+    path = target / MARKER
+    if path.is_symlink(): raise ValueError('Installation marker must not be a symlink')
+    data = json.loads(path.read_text())
+    if data.get('id') != 'hello-lock-standalone' or not isinstance(data.get('files'), dict):
+        raise ValueError('Target is not a managed Hello Lock installation')
+    for name in data['files']:
+        if Path(name).is_absolute() or '..' in Path(name).parts: raise ValueError('Unsafe installation manifest')
+    return data
+
+
+def inside(target, relative):
+    path = target / relative
+    for parent in (path, *path.parents):
+        if parent == target: break
+        if parent.is_symlink(): raise ValueError('Installation path contains a symlink')
+    return path
+
+
+def install(source, target, bindir):
+    if target.is_symlink() or bindir.is_symlink(): raise ValueError('Installation directories must not be symlinks')
+    if target == source or source in target.parents: raise ValueError('Install outside the source checkout')
+    old = manifest(target) if target.exists() else {'files': {}}
+    wrapper = bindir / 'hello-lock'
+    wrapper_text = '#!/usr/bin/env python3\nimport os,sys\nos.execv(sys.executable,[sys.executable,' + repr(str(target / 'bin/hello-lock')) + ',*sys.argv[1:]])\n'
+    if wrapper.is_symlink() or (wrapper.exists() and wrapper.read_text() != wrapper_text):
+        raise ValueError('Refusing to replace an unrelated hello-lock command')
+    names = list(runpy.run_path(str(source / 'bin/hello-lock'))['VISUAL_FILES']) + ['standalone', 'LICENSE', 'THIRD_PARTY_NOTICES.md']
+    files = []
+    for name in names:
+        item = source / name
+        if item.is_symlink(): raise ValueError('Installation source must not contain symlinks')
+        for path in sorted(item.rglob('*')) if item.is_dir() else [item]:
+            relative = path.relative_to(source)
+            if '__pycache__' in relative.parts or any(p.startswith('.') for p in relative.parts) or path.name in ('AGENTS.md', 'CLAUDE.md'): continue
+            if path.is_symlink(): raise ValueError('Installation source must not contain symlinks')
+            if path.is_file(): files.append((relative, path))
+    for relative, path in files:
+        destination = inside(target, relative)
+        if destination.is_symlink(): raise ValueError('Refusing to replace a symlink')
+        if destination.exists() and (str(relative) not in old['files'] or digest(destination) != old['files'][str(relative)]):
+            raise ValueError('Refusing to overwrite a modified installation file: ' + str(relative))
+    target.mkdir(parents=True, mode=0o700, exist_ok=True)
+    record = {}
+    for relative, path in files:
+        destination = inside(target, relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)
+        record[str(relative)] = digest(destination)
+    # Public source files only. Preferences and imported personal assets are outside this tree.
+    data = {'id': 'hello-lock-standalone', 'files': record, 'wrapper': str(wrapper), 'wrapper_sha256': hashlib.sha256(wrapper_text.encode()).hexdigest()}
+    descriptor, temporary = tempfile.mkstemp(dir=target, prefix='.install-')
+    try:
+        with os.fdopen(descriptor, 'w') as stream: json.dump(data, stream)
+        os.replace(temporary, target / MARKER)
+    finally: Path(temporary).unlink(missing_ok=True)
+    bindir.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text(wrapper_text); wrapper.chmod(0o700)
+
+
+def remove(target, bindir):
+    if target.is_symlink(): raise ValueError('Installation must not be a symlink')
+    data = manifest(target)
+    wrapper = bindir / 'hello-lock'
+    if str(wrapper) == data.get('wrapper') and not wrapper.is_symlink() and wrapper.exists() and digest(wrapper) == data.get('wrapper_sha256'):
+        wrapper.unlink()
+    for name, expected in data['files'].items():
+        path = inside(target, name)
+        if path.is_file() and not path.is_symlink() and digest(path) == expected: path.unlink()
+    (target / MARKER).unlink()
+    for path in sorted(target.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+        if path.is_dir() and not path.is_symlink():
+            try: path.rmdir()
+            except OSError: pass
+    try: target.rmdir()
+    except OSError: pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=('install', 'remove'))
+    parser.add_argument('--data-dir', type=Path, default=Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share') / 'hello-lock')
+    parser.add_argument('--bin-dir', type=Path, default=Path.home() / '.local/bin')
+    args = parser.parse_args()
+    if os.geteuid() == 0: parser.error('Run the user installation as your desktop user')
+    target = args.data_dir.expanduser().absolute(); bindir = args.bin_dir.expanduser().absolute()
+    try:
+        if args.action == 'install': install(Path(__file__).resolve().parents[1], target, bindir)
+        else: remove(target, bindir)
+    except (OSError, ValueError) as error:
+        print('hello-lock-install: ' + str(error), file=sys.stderr); return 2
+    print('Hello Lock ' + args.action + ' complete; preferences were preserved.')
+    if args.action == 'install': print('Password locking also requires explicit root PAM setup: bin/hello-lock-pam install')
+    return 0
+
+
+if __name__ == '__main__': sys.exit(main())

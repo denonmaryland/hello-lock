@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Build local standalone packages from an explicit public-source allowlist."""
+import argparse
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import re
+import runpy
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+NAME = 'hello-lock-standalone'
+ARCH_DEPENDS = ['python', 'quickshell>=0.2.1', 'qt6-svg', 'qt6-declarative', 'qt6-wayland', 'pam', 'coreutils', 'bash']
+RPM_DEPENDS = ['python3', 'quickshell >= 0.2.1', 'qt6-qtsvg', 'qt6-qtdeclarative', 'qt6-qtwayland', 'pam', 'coreutils', 'bash']
+DEB_DEPENDS = ['python3', 'quickshell (>= 0.2.1)', 'libqt6svg6', 'qt6-wayland', 'libpam0g', 'coreutils', 'bash',
+               'qml6-module-qtquick', 'qml6-module-qtquick-window', 'qml6-module-qtquick-controls',
+               'qml6-module-qtquick-layouts', 'qml6-module-qtquick-dialogs',
+               'qml6-module-qtquick-effects', 'qml6-module-qtquick-shapes']
+
+
+def payload(source):
+    names = list(runpy.run_path(str(source / 'bin/hello-lock'))['VISUAL_FILES']) + ['standalone', 'LICENSE', 'THIRD_PARTY_NOTICES.md']
+    files = {}
+    for name in names:
+        root = source / name
+        if root.is_symlink(): raise ValueError('Source package refuses symlink roots')
+        for path in sorted(root.rglob('*')) if root.is_dir() else [root]:
+            relative = path.relative_to(source)
+            if relative.parts[:2] == ('typing', 'harness'): continue
+            if '__pycache__' in relative.parts or any(p.startswith('.') for p in relative.parts) or path.name in ('AGENTS.md', 'CLAUDE.md'): continue
+            if path.is_symlink(): raise ValueError('Source package refuses symlinks')
+            if path.is_file():
+                data = path.read_bytes()
+                # Native packages use the distro interpreter. Match RPM's
+                # shebang normalization deterministically on every format.
+                if data.startswith(b'#!/usr/bin/env -S python3 -I\n'):
+                    data = data.replace(b'#!/usr/bin/env -S python3 -I\n', b'#!/usr/bin/python3 -I\n', 1)
+                elif data.startswith(b'#!/usr/bin/env python3\n'):
+                    data = data.replace(b'#!/usr/bin/env python3\n', b'#!/usr/bin/python3\n', 1)
+                elif data.startswith(b'#!/usr/bin/env bash\n'):
+                    data = data.replace(b'#!/usr/bin/env bash\n', b'#!/usr/bin/bash\n', 1)
+                files['usr/share/hello-lock/' + str(relative)] = (data, 0o755 if os.access(path, os.X_OK) else 0o644)
+    wrapper = b'#!/usr/bin/python3\nimport os,sys\nos.execv("/usr/share/hello-lock/bin/hello-lock",["hello-lock",*sys.argv[1:]])\n'
+    files['usr/bin/hello-lock'] = (wrapper, 0o755)
+    files['etc/pam.d/hello-lock'] = (runpy.run_path(str(source / 'bin/hello-lock-pam'))['POLICY'], 0o644)
+    files['usr/lib/systemd/user/hello-lock-idle.service'] = ((source / 'standalone/hello-lock-idle.service').read_bytes(), 0o644)
+    for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/standalone.md', 'docs/packaging.md', 'docs/release-review.md'):
+        path = source / name
+        if path.exists(): files['usr/share/doc/' + NAME + '/' + path.name] = (path.read_bytes(), 0o644)
+    copyright_text = b'Hello Lock: MIT; bundled UI fonts: OFL-1.1.\n\n'
+    for path in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'wordmark/LICENSE-figlet.txt', 'fonts/OFL-oxanium.txt', 'fonts/OFL-sharetechmono.txt'):
+        copyright_text += (source / path).read_bytes() + b'\n\n'
+    files['usr/share/doc/' + NAME + '/copyright'] = (copyright_text, 0o644)
+    record = {name: hashlib.sha256(value[0]).hexdigest() for name, value in sorted(files.items())}
+    files['usr/share/doc/' + NAME + '/BUILD-MANIFEST.json'] = (json.dumps(record, sort_keys=True, indent=2).encode() + b'\n', 0o644)
+    return files
+
+
+def code_hash(files):
+    records = {name: [hashlib.sha256(data).hexdigest(), mode]
+               for name, (data, mode) in sorted(files.items()) if not name.startswith('usr/share/doc/')}
+    return hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()
+
+
+def archive(files, epoch, mode='w:gz'):
+    output = io.BytesIO()
+    # gzip's timestamp is fixed too, for reproducible local builds.
+    if mode == 'w:gz':
+        import gzip
+        target = gzip.GzipFile(fileobj=output, mode='wb', mtime=epoch, filename='')
+        stream = tarfile.open(fileobj=target, mode='w')
+    else:
+        target = None
+        stream = tarfile.open(fileobj=output, mode=mode)
+    with stream:
+        directories = set()
+        for name in files:
+            directories.update(str(parent) for parent in Path(name).parents if str(parent) != '.')
+        for name in sorted(directories):
+            item = tarfile.TarInfo(name + '/'); item.type = tarfile.DIRTYPE
+            item.mode = 0o755; item.uid = item.gid = 0; item.mtime = epoch
+            stream.addfile(item)
+        for name, (data, permissions) in sorted(files.items()):
+            item = tarfile.TarInfo(name); item.size = len(data); item.mode = permissions; item.mtime = epoch
+            item.uid = item.gid = 0
+            stream.addfile(item, io.BytesIO(data))
+    if target: target.close()
+    return output.getvalue()
+
+
+def ar(members):
+    output = bytearray(b'!<arch>\n')
+    for name, data in members:
+        header = f'{name + "/":<16}{0:<12}{0:<6}{0:<6}{"100644":<8}{len(data):<10}`\n'.encode()
+        output.extend(header + data + (b'\n' if len(data) % 2 else b''))
+    return output
+
+
+def build(source, destination, kind, version, release, epoch=0):
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', version) or not re.fullmatch(r'[0-9][a-zA-Z0-9.]*', release):
+        raise ValueError('Use numeric version and a release such as 0.preview1')
+    files = payload(source)
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    full = version + '-' + release
+    if kind == 'tar':
+        name = NAME + '-' + full + '.tar.gz'; data = archive(files, epoch)
+    elif kind == 'deb':
+        control = ('Package: ' + NAME + '\nVersion: ' + full + '\nArchitecture: all\n'
+                   'Maintainer: Hello Lock project <noreply@github.com>\nSection: x11\nPriority: optional\n'
+                   'Depends: ' + ', '.join(DEB_DEPENDS) + '\nRecommends: swayidle, grim, curl, qml6-module-qtmultimedia\n'
+                   'Description: Standalone personalized Wayland lock screen (technical preview)\n').encode()
+        control_tar = archive({'control': (control, 0o644), 'conffiles': (b'/etc/pam.d/hello-lock\n', 0o644)}, epoch)
+        name = NAME + '_' + full + '_all.deb'; data = ar([('debian-binary', b'2.0\n'), ('control.tar.gz', control_tar), ('data.tar.gz', archive(files, epoch))])
+    elif kind == 'arch':
+        info = ['pkgname = ' + NAME, 'pkgbase = ' + NAME, 'pkgver = ' + full,
+                'pkgdesc = Standalone personalized Wayland lock screen (technical preview)',
+                'url = https://github.com/denonmaryland/hello-lock', 'builddate = ' + str(epoch),
+                'packager = Hello Lock local preview build', 'size = ' + str(sum(len(v[0]) for v in files.values())),
+                'arch = any', 'license = MIT', 'license = OFL-1.1', 'backup = etc/pam.d/hello-lock']
+        info += ['depend = ' + item for item in ARCH_DEPENDS]
+        info += ['optdepend = ' + item for item in ('swayidle: idle and before-sleep hooks', 'grim: CRT capture', 'curl: opt-in weather', 'qt6-multimedia: typing sounds', 'pipewire-audio: sound cues')]
+        files['.PKGINFO'] = (('\n'.join(info) + '\n').encode(), 0o644)
+        name = NAME + '-' + full + '-any.pkg.tar.zst'
+        data = subprocess.run(['zstd', '-q', '-T1', '-c'], input=archive(files, epoch, mode='w'), capture_output=True, check=True).stdout
+    elif kind == 'rpm':
+        if not shutil.which('rpmbuild'): raise ValueError('rpmbuild is required; build RPMs in the Fedora guest')
+        with tempfile.TemporaryDirectory(prefix='hello-rpm-') as directory:
+            top = Path(directory)
+            for folder in ('BUILD', 'BUILDROOT', 'RPMS', 'SOURCES', 'SPECS', 'SRPMS'): (top / folder).mkdir()
+            (top / 'SOURCES/payload.tar.gz').write_bytes(archive(files, epoch))
+            listing = ['%config(noreplace) /etc/pam.d/hello-lock', '/usr/bin/hello-lock', '/usr/lib/systemd/user/hello-lock-idle.service', '/usr/share/hello-lock', '/usr/share/doc/' + NAME]
+            spec = f'''Name: {NAME}
+Version: {version}
+Release: {release}
+Summary: Standalone personalized Wayland lock screen (technical preview)
+License: MIT AND OFL-1.1
+URL: https://github.com/denonmaryland/hello-lock
+BuildArch: noarch
+%global _python_bytecompile_extra 0
+Source0: payload.tar.gz
+Requires: {', '.join(RPM_DEPENDS)}
+Recommends: swayidle, grim, curl, qt6-qtmultimedia
+%description
+Independent Hyprland/Sway locker with explicit opt-in idle integration.
+%prep
+%build
+%install
+mkdir -p %{{buildroot}}
+tar -xzf %{{SOURCE0}} -C %{{buildroot}}
+%files
+''' + '\n'.join(listing) + '\n'
+            specfile = top / 'SPECS/hello-lock.spec'; specfile.write_text(spec)
+            subprocess.run(['rpmbuild', '-bb', '--define', '_topdir ' + str(top), '--define', '_build_id_links none', str(specfile)],
+                           check=True, stdout=subprocess.DEVNULL)
+            packages = list((top / 'RPMS').rglob('*.rpm'))
+            if len(packages) != 1: raise ValueError('Expected exactly one RPM')
+            name, data = packages[0].name, packages[0].read_bytes()
+    else: raise ValueError('Unknown package format')
+    path = destination / name
+    # Never follow or overwrite an existing output, even a same-name symlink.
+    with path.open('xb') as stream: stream.write(data)
+    with path.with_name(name + '.sha256').open('x') as stream: stream.write(hashlib.sha256(data).hexdigest() + '  ' + name + '\n')
+    return path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--format', choices=('tar', 'arch', 'deb', 'rpm'), required=True)
+    parser.add_argument('--version', required=True)
+    parser.add_argument('--release', default='0.preview1')
+    parser.add_argument('--output-dir', type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        path = build(ROOT, args.output_dir.expanduser().absolute(), args.format, args.version, args.release,
+                     int(os.environ.get('SOURCE_DATE_EPOCH', '0')))
+        print(path)
+        return 0
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print('hello-lock-package: ' + str(error), file=sys.stderr); return 2
+
+
+if __name__ == '__main__': sys.exit(main())

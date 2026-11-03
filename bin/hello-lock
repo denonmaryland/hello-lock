@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Standalone settings, visual previews and PAM-authenticated Wayland locking."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import hashlib
+
+
+VISUAL_FILES = ("Settings.qml", "LockView.qml", "UnlockSplash.qml", "Presets.js", "TypingSounds.js", "TypingSound.qml",
+                "platform", "settings", "handoff", "typing", "symbols", "fonts", "sounds", "wordmark", "bin")
+
+
+def weather_cache(config):
+    profile = hashlib.sha256(str(Path(config).absolute()).encode()).hexdigest()
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "hello-lock-standalone" / profile / "weather.json"
+
+
+def stage_runtime(source, stage):
+    plugin = stage / "plugin"
+    plugin.mkdir()
+    for name in VISUAL_FILES:
+        (plugin / name).symlink_to(source / name)
+    shutil.copy2(source / "standalone/shell.qml", stage / "shell.qml")
+    return plugin
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("settings", "preview", "splash", "doctor", "lock", "status", "idle", "suspend"), nargs="?", default="settings")
+    parser.add_argument("--config-dir", type=Path, help="standalone settings directory")
+    parser.add_argument("--plain", action="store_true", help="use the independent plain lock UI")
+    parser.add_argument("--background", action="store_true", help="return after compositor-confirmed locking")
+    parser.add_argument("--idle-seconds", type=int, default=300, help="idle lock timeout (default 300 seconds)")
+    args = parser.parse_args()
+    source = Path(__file__).resolve().parents[1]
+    config = args.config_dir or Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "hello-lock-standalone"
+    config = config.expanduser().absolute()
+    if args.action in ("lock", "status", "idle", "suspend"):
+        sys.path.insert(0, str(source / 'standalone'))
+        import runtime
+        try:
+            if args.action == 'status':
+                print(json.dumps(runtime.status()))
+                return 0
+            os.umask(0o077)
+            if args.action in ('idle', 'suspend'):
+                import idle
+                return idle.run(source, config, args.idle_seconds, runtime) if args.action == 'idle' else idle.suspend(source, config, runtime)
+            return (runtime.background if args.background else runtime.run)(source, config, args.plain)
+        except (OSError, ValueError) as error:
+            print('hello-lock: ' + str(error), file=sys.stderr)
+            return 2
+    if args.action == "doctor":
+        policy = False
+        try:
+            import runpy
+            runpy.run_path(str(source / 'bin/hello-lock-pam'))['check']()
+            policy = True
+        except (OSError, ValueError): pass
+        checks = {"quickshell": bool(shutil.which("qs")), "python": True,
+                  "wayland_session": bool(os.environ.get("WAYLAND_DISPLAY")),
+                  "shared_visuals": (source / "Settings.qml").is_file(),
+                  "optional_commands": {name: bool(shutil.which(name)) for name in ("swayidle", "grim", "curl", "pw-play", "paplay")},
+                  "native_file_dialog": "QtQuick.Dialogs (checked when opened)"}
+        print(json.dumps({"mode": "standalone", "pam_policy": policy,
+                          "password_lock": {
+                              "experimental": True,
+                              "compositor": "hyprland" if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") else "sway" if os.environ.get("SWAYSOCK") else "unsupported",
+                              "authentication": "one hidden PAM password prompt",
+                              "hyprland_crash_recovery": "requires misc.allow_session_lock_restore=true; not changed automatically",
+                              "idle_integration": "opt-in: hello-lock idle; requires swayidle; no automatic activation"},
+                          "config_dir": str(config), "checks": checks}, indent=2))
+        return 0 if all(checks[k] for k in ("quickshell", "wayland_session", "shared_visuals")) else 1
+    if not shutil.which("qs"):
+        parser.error("Quickshell (qs) is required")
+    # Quickshell resolves qs imports relative to the launch root. Stage only the
+    # shared visuals: Omarchy's service and authentication code are not included.
+    with tempfile.TemporaryDirectory(prefix="hello-lock-standalone-") as directory:
+        stage = Path(directory)
+        plugin = stage_runtime(source, stage)
+        env = dict(os.environ, HELLO_LOCK_SOURCE=str(plugin), HELLO_LOCK_ACTION=args.action,
+                   HELLO_LOCK_CONFIG_DIR=str(config),
+                   HELLO_STATUS_WEATHER_CACHE=os.environ.get("HELLO_STATUS_WEATHER_CACHE") or str(weather_cache(config)))
+        process = subprocess.Popen(["qs", "-p", str(stage)], env=env)
+        try:
+            return process.wait()
+        except KeyboardInterrupt:
+            return 130
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

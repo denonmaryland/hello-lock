@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Manage only Hello Lock's root-owned PAM include; never changes login policy."""
+import argparse
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+
+POLICY = b'#%PAM-1.0\n# Hello Lock password reauthentication; uses the distribution login auth stack.\nauth include login\n'
+DIRECTORY = Path('/etc/pam.d')
+NAME = 'hello-lock'
+
+
+def trusted(path, directory=False):
+    info = path.stat()
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        raise ValueError('PAM path must be root-owned and not group/other writable')
+    if directory and not stat.S_ISDIR(info.st_mode): raise ValueError('PAM directory is not a directory')
+    if not directory and not stat.S_ISREG(info.st_mode): raise ValueError('PAM policy is not a regular file')
+
+
+def check(directory=DIRECTORY):
+    trusted(directory, True)
+    # Vendor login files may be symlinks (e.g. authselect); validate their target.
+    login = directory / 'login'
+    trusted(login)
+    target = directory / NAME
+    if target.is_symlink(): raise ValueError('Hello Lock PAM policy must not be a symlink')
+    trusted(target)
+    if target.read_bytes() != POLICY:
+        raise ValueError('Hello Lock PAM policy differs from the managed template')
+
+
+def install(directory=DIRECTORY):
+    if os.geteuid() != 0: raise PermissionError('PAM installation requires root')
+    trusted(directory, True)
+    trusted(directory / 'login')
+    target = directory / NAME
+    if target.exists() or target.is_symlink():
+        check(directory)
+        return
+    descriptor, temporary = tempfile.mkstemp(prefix='.hello-lock-', dir=directory)
+    try:
+        os.fchmod(descriptor, 0o644)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(POLICY); stream.flush(); os.fsync(stream.fileno())
+        # Publish only a complete policy, without replacing a concurrent admin edit.
+        os.link(temporary, target, follow_symlinks=False)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def remove(directory=DIRECTORY):
+    if os.geteuid() != 0: raise PermissionError('PAM removal requires root')
+    check(directory)
+    (directory / NAME).unlink()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=('check', 'install', 'remove'))
+    args = parser.parse_args()
+    try:
+        {'check': check, 'install': install, 'remove': remove}[args.action]()
+    except (OSError, ValueError) as error:
+        print('hello-lock-pam: ' + str(error), file=sys.stderr)
+        return 2
+    print('hello-lock-pam: ' + args.action + ' OK')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Install/remove only the managed user unit. Never starts or enables a service."""
+import argparse
+import os
+from pathlib import Path
+import runpy
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def unit(executable, seconds):
+    if type(seconds) is not int or not 1 <= seconds <= 86400: raise ValueError('Idle timeout must be 1–86400 seconds')
+    # systemd specifiers expand even inside quotes. Its ExecStart is not a shell.
+    path = str(executable)
+    if any(ord(c) < 32 for c in path): raise ValueError('Control characters are not allowed in the executable path')
+    path = path.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%')
+    template = (ROOT / 'standalone/hello-lock-idle.service').read_text()
+    return template.replace('ExecStart=/usr/bin/hello-lock idle', 'ExecStart="' + path + '" idle --idle-seconds ' + str(seconds))
+
+
+def change(action, directory, executable, seconds):
+    if directory.is_symlink(): raise ValueError('Unit directory must not be a symlink')
+    path = directory / 'hello-lock-idle.service'
+    text = unit(executable, seconds)
+    if path.is_symlink(): raise ValueError('Managed unit must not be a symlink')
+    if path.exists() and path.read_text() != text:
+        raise ValueError('Unit differs from this managed template; preserve it and review manually')
+    if action == 'remove':
+        path.unlink(missing_ok=True)
+        return
+    if not executable.is_file() or not os.access(executable, os.X_OK): raise ValueError('Install Hello Lock first or supply its absolute executable')
+    directory.mkdir(parents=True, exist_ok=True)
+    writer = runpy.run_path(str(ROOT / 'bin/hello-config'))['atomic_write']
+    writer(str(path), text)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=('install', 'remove'))
+    parser.add_argument('--idle-seconds', type=int, default=300)
+    parser.add_argument('--executable', type=Path, default=ROOT / 'bin/hello-lock')
+    parser.add_argument('--unit-dir', type=Path, default=Path(os.environ.get('XDG_CONFIG_HOME') or Path.home()/'.config') / 'systemd/user')
+    args = parser.parse_args()
+    if os.geteuid() == 0: parser.error('Run as the desktop user')
+    try: change(args.action, args.unit_dir.expanduser().absolute(), args.executable.expanduser().absolute(), args.idle_seconds)
+    except (OSError, ValueError) as error:
+        print('hello-lock-idle-install: ' + str(error), file=sys.stderr); return 2
+    print('Managed idle unit ' + args.action + ' complete. No service was started or enabled.')
+    print('Use systemctl --user daemon-reload; review docs/standalone.md before enabling idle integration.')
+    return 0
+
+
+if __name__ == '__main__': sys.exit(main())

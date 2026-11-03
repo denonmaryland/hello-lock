@@ -1,0 +1,17 @@
+[Unit]
+Description=Hello Lock idle and before-sleep locking
+Documentation=https://github.com/denonmaryland/hello-lock
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+# The locker has its own supervisor and must outlive the idle policy.
+KillMode=process
+TimeoutStopSec=20
+ExecStart=/usr/bin/hello-lock idle
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
