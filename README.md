@@ -44,7 +44,7 @@ Built on Omarchy's own lock service, with the password path left untouched.</p>
 </tr>
 <tr>
 <td width="50%" valign="top"><strong>Calm when you want it.</strong><br>Turn the greeting text, the blurred backdrop or both off, and the symbol animates straight over your desktop. Turn Hyprland's animations off and Hello Lock switches to gentle fades too.</td>
-<td width="50%" valign="top"><strong>Safe by design.</strong><br>Password checking is Omarchy's code, line for line. The animation starts only after PAM says yes and can never block the unlock. Weather is the only thing that goes online, and it is one switch away from off.</td>
+<td width="50%" valign="top"><strong>Safe by design.</strong><br>Password and fingerprint checks use PAM. Unlock visuals begin only after authentication succeeds, with an independent release gate. Weather is the only thing that goes online, and it is one switch away from off.</td>
 </tr>
 </table>
 
@@ -53,6 +53,31 @@ Built on Omarchy's own lock service, with the password path left untouched.</p>
 <br><br>
 <img src="docs/onboarding.gif" alt="The setup screen: typing a wordmark, trying styles, picking an unlock symbol" width="720">
 </div>
+
+## Standalone technical preview
+
+Settings and visual previews can now run independently of Omarchy from this
+checkout: `./bin/hello-lock settings`. An experimental standalone password
+locker now supports Hyprland and Sway, with explicit PAM setup and autonomous
+VM authentication tests. Standalone locks now include persistent branding
+rotation, optional sounds and status, weather with explicit opt-in, best-effort
+CRT capture, automatic motion and opt-in idle/suspend integration. Local
+[package builders](docs/packaging.md) support Arch/CachyOS, Fedora and Debian-family
+formats; format availability alone does not establish runtime support. See [standalone setup and scope](docs/standalone.md).
+The [autonomous distro test lab](docs/autonomous-testing.md) includes Arch,
+Fedora, Ubuntu, Debian and CachyOS targets, with explicit verification status
+for each. The baseline standalone suite passed on Arch/Hyprland, Fedora 44/Sway
+and genuine CachyOS/Hyprland in disposable QXL/Mesa VMs, including real password
+authentication and kernel-confirmed s2idle suspend. These are tested
+configurations; inclusion in the matrix does not establish complete lock-screen
+support. Expanded feature-test results and unresolved failures are recorded in
+[standalone verification](docs/standalone.md#verification-and-remaining-work).
+Deep S3 and physical hardware remain unverified.
+
+The [standalone support policy](docs/support.md) lists the initial preview
+configurations, installation paths and unverified distributions. The
+[separate AI security review](docs/security-review-2026-11-03.md) records its
+scope and limitations; it is not a human audit.
 
 ## Install
 
@@ -145,6 +170,10 @@ omarchy-shell lock settings
 
 An icon rail on the left holds eight sections: **You** (name, birthday, the status word), **Logo**, **Unlock** (symbol, the gold unlock, greeting, background and the transition), **Typing**, **Lock screen** (clock, power-down, motion, the menu entry), **Sound** (on/off, typing sound, volume, quiet hours), **Presets** (saved looks and rotation) and **Weather**. Each section's settings sit beside a **live preview** of what they change: the greeting as you type your name, your logo on a miniature lock screen, the unlock symbol and its transition (the real transition file, played in place), the real typing effect driven by pretend keystrokes, the CRT power-down as a storyboard, every sound cue with its waveform (**Play** runs the sound helper once per click), your presets as a carousel, and where the weather appears. The previews draw sample text only, make no network requests, and stop when hidden. The full-screen button and **Preview on the lock screen** still open the real previews. Each change saves as you make it and applies the next time you lock. The window keeps one timestamped backup of `config.json` per visit, and only the newest 10 backups are kept. Esc closes the window, and Ctrl+PageDown / Ctrl+PageUp move between sections. On screens smaller than the window it scales down to fit, and long sections scroll.
 
+**Unlock timing:** Settings → Unlock has an **Unlock animation** switch. Turn it off to go straight to the desktop as soon as password or fingerprint authentication succeeds, with no visual handoff delay or splash. With animations on, **Automatic timing** keeps the existing sequences. Turn Automatic timing off for a **Maximum time on screen** slider and exact seconds entry (0.5–8.0 seconds). This caps the desktop overlay after the session has unlocked; it does not stretch a short sequence, speed up the artwork or delay authentication. Any key or click still dismisses it sooner. Explicit animation previews remain available while real unlock animations are off.
+
+**Saved versus applied:** ordinary settings changes apply on the next lock and do not require a shell restart. Settings explicitly asks the service to reload successful saves, including preset changes, and reloads again when it closes. Branding stays fixed for a lock already in progress. After installing, enabling or updating the plugin, restart the shell once with `omarchy restart shell` so it loads the new service code. If a change appears to revert, check the visible save status first, close and reopen Settings, then run `~/.config/omarchy/plugins/hello-lock/bin/hello-lock-doctor` for read-only installation/configuration diagnostics. A failed save stays visible; restarting is not a substitute for fixing a write error.
+
 A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows as **Custom**. If you try a built-in symbol, you can switch back to Custom until you close the window.
 
 **Style → Lock Screen** is added by the setup if you leave its box ticked, and **Settings → Lock screen → Show in the Omarchy menu** turns it on or off any time. It is one line in your own `~/.config/omarchy/extensions/omarchy-menu.jsonc`: Hello Lock keeps everything else in that file, saves a private (owner-only) backup before each change, and leaves the file alone if it can't read it or if you already have your own **Style → Lock Screen** entry. The line hides itself when Hello Lock isn't installed. From a terminal: `bin/hello-menu status`, `add` or `remove` in the plugin folder; `bin/hello-menu secure` only makes existing backups private.
@@ -219,6 +248,8 @@ Create `~/.config/hello-lock/config.json`. Every field is optional, and changes 
 | `legendary` | `true` | The 2% gold unlock. |
 | `greeting` | `true` | The typed status line, the greeting and the weather/battery line after an unlock. `false` plays just the symbol. |
 | `unlockBackdrop` | `true` | The blurred backdrop behind the unlock animation. `false` fades it away right after you unlock, so the symbol plays over your desktop and the windows you had open. |
+| `unlockAnimation` | `true` | `false` unlocks immediately after successful authentication, without the 360 ms visual handoff delay or desktop splash. Preview buttons still let you inspect animations. |
+| `unlockDuration` | `0` | Maximum desktop overlay time, in whole milliseconds: `0` keeps natural timing, or `500`–`8000` sets a cap (Settings shows seconds). Shorter sequences can finish earlier. Does not change the lock release time. |
 | `clock` | `true` | The clock and date on the lock screen. |
 | `typingEffect` | `"cells"` | What the logo does while you type: `"cells"`, `"scanline"`, `"liquid"`, `"decrypt"`, `"equalizer"`, `"sweep"`, `"pulse"`, `"off"`, or `"shuffle"` for a different one each lock (see [Typing effects](#typing-effects)). |
 | `handoff` | `"shuffle"` | How the logo hands over to the symbol at unlock: `"fallback"`, `"liftoff"`, `"slide"`, `"flip"`, `"dissolve"`, `"split"`, `"blinds"`, `"scatter"`, `"wipe"`, `"glitch"`, `"poweroff"`, `"flythrough"`, `"fold"`, `"drop"`, `"pixelate"`, or `"shuffle"` (see [Transitions](#transitions)). |
@@ -269,11 +300,13 @@ It only reads; it changes nothing. It doesn't go online unless you add `--online
 
 A lock screen has one job, so here is exactly what Hello Lock changes and what it doesn't.
 
-**Password checking is Omarchy's code, unchanged.** Hello Lock started as a copy of Omarchy's lock service (`/usr/share/omarchy/shell/plugins/lock/Service.qml`). The two PAM contexts (`omarchy-lock-password` and `omarchy-lock-fingerprint`), the functions that send your password to PAM, the fingerprint flow, the check for `/etc/pam.d/omarchy-lock-password` and the `lock` command are identical, line for line. The only change in the password path is a sound after a failed attempt. Hello Lock's lock view is redrawn, but it only collects what you type and hands it to that same unchanged code. Hello Lock adds no PAM files and no other way in.
+**In the Omarchy plugin, password checking uses Omarchy's code.** Hello Lock started as a copy of Omarchy's lock service (`/usr/share/omarchy/shell/plugins/lock/Service.qml`). The two PAM contexts (`omarchy-lock-password` and `omarchy-lock-fingerprint`), the functions that send your password to PAM, the fingerprint flow, the check for `/etc/pam.d/omarchy-lock-password` and the `lock` command are identical, line for line. The only change in the password path is a sound after a failed attempt. Hello Lock's lock view is redrawn, but it only collects what you type and hands it to that same unchanged code. The Omarchy plugin adds no PAM files or authentication bypass. Experimental standalone locking uses a separate, explicitly installed PAM policy; see [its scope and setup](docs/standalone.md).
 
-**The animation starts only after your password is accepted.** The unlock runs only when PAM reports success, from the password or the fingerprint, just like the stock lock. Hello Lock then dims the lock screen and starts a fixed 0.36 s timer. When it fires, the session unlocks. The timer doesn't wait for the animation, and the calls into the animation during unlock are wrapped so an error in it can't stop the unlock. The animation itself plays on your desktop after the session is already unlocked. Any key or click skips it, and it removes itself after 8.5 s at most.
+**The animation starts only after your password is accepted.** The unlock runs only when PAM reports success, from the password or the fingerprint, just like the stock lock. With unlock animations enabled, Hello Lock then dims the lock screen and starts a fixed 0.36 s timer. When it fires, the session unlocks. The timer doesn't wait for the animation, and the calls into the animation during unlock are wrapped so an error in it can't stop the unlock. The animation itself plays on your desktop after the session is already unlocked. Any key or click skips it, and it removes itself after 8.5 s at most (or sooner with a custom time cap). With `unlockAnimation: false`, successful authentication releases the lock directly and no splash is shown.
 
 **If the animation code fails to load, the lock still works.** The unlock animation and the setup screen are loaded separately (a QML `Loader`). If either file is broken, it just doesn't appear; locking and unlocking go on as normal. The lock screen itself is part of the lock service, as in Omarchy. If that part were broken, the service wouldn't load at all; `hello-lock-doctor` tells you, and `omarchy plugin disable hello-lock && omarchy restart shell` brings the stock lock back.
+
+**Unexpected lock loss triggers recovery.** If the compositor drops the session lock while Hello Lock still requests it, Hello Lock keeps the request and queues a new lock instead of treating the loss as an unlock. Both lock-state and secure-state loss are handled, using the recovery approach from [Omarchy PR #14988](https://github.com/omacom/omarchy/pull/14988). Recovery waits for a real output and the existing 500 ms stabilization timer. The desktop can be exposed between loss and reacquisition; this does not prevent the underlying compositor lock loss. A successful authenticated unlock clears the request before release, so it does not trigger recovery.
 
 **Power-down snapshots use private runtime storage.** For the CRT effect, Hello Lock takes one JPEG per monitor with `grim` as you lock. `bin/hello-snapshot` requires an absolute, user-owned `XDG_RUNTIME_DIR` that other users can't read or write (traverse-only modes such as 710 or 711 are accepted); without it, the effect is skipped and `hello-lock-doctor` says why. There is no `/tmp` fallback. On a normal Omarchy session this is RAM-backed `/run/user/<uid>`. Each capture gets a unique mode-700 directory named `hello-lock-snapshot-*`, with mode-600 files and numeric filenames. Monitor names are passed as arguments, never used as paths.
 
@@ -360,6 +393,7 @@ There's no choice to make in setup; to pin one, pick it in Settings → Unlock �
 - The `@omarchy` unlock symbol is traced from Omarchy's own icon (`/usr/share/omarchy/icon.txt`, MIT). The other built-in symbols are original pixel art drawn for this project. Their grids live in `symbols/build.py`.
 - The other wordmark styles use *Hello Blocks* (`wordmark/glyphs.py`), an original A–Z/0–9 pixel alphabet drawn for this project, rendered by `bin/hello-wordmark`.
 - Fonts: [Oxanium](https://fonts.google.com/specimen/Oxanium) and [Share Tech Mono](https://fonts.google.com/specimen/Share+Tech+Mono), SIL Open Font License 1.1.
+- Typography: Oxanium is used for the clock and prominent greetings; Share Tech Mono for supporting/status text; general controls follow Omarchy's configured UI font. The **MARY** wordmark in example captures is custom logo artwork traced into SVG paths, not a bundled font or a downloadable typeface. It is separate from the built-in generated wordmark styles.
 - Lock, unlock and wrong-password cues are synthesized by `sounds/generate-cues.py`, and typing sounds by `sounds/generate-typing.py`, both with Python's standard library. No sampled or downloaded audio is used; both packs are part of this project. `sounds/peaks.py` precomputes the waveforms Settings draws (`settings/SoundPeaks.js`).
 
 MIT License; see [LICENSE](LICENSE). Third-party licenses and credits: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+- Add explicit standalone idle/logind integration through swayidle, a suspend
+  command that aborts unless lock readiness is confirmed, and an opt-in managed
+  user-unit helper. Existing idle/compositor configuration is never replaced.
+- Wire standalone automatic motion and private, parallel screenshot/CRT capture
+  with per-output completion, generation checks, expiry and late cleanup.
+- Add local Arch/CachyOS, RPM and Debian package builders, managed PAM config
+  metadata, a source manifest and native guest install/remove/PAM checks.
+
+- Wire standalone confirmed-lock preset rotation and persistent shuffle bags,
+  optional typing/cue audio and unlock status. Add explicit weather opt-in with
+  independent location/units and a profile-specific cache. Keep optional work
+  independent of PAM and preserve selections across backend recovery.
+
+- Verify the baseline standalone suite on Arch/Hyprland, Fedora 44/Sway and genuine
+  CachyOS/Hyprland in 768 MiB QXL/Mesa guests: real PAM, crash recovery,
+  kernel-confirmed s2idle, post-resume screen/input checks and missing-visual
+  fallback. Both Hyprland guests also verify mixed-scale virtual-output changes.
+  Deep S3 and physical hardware remain unverified.
+
+- Settings → Unlock now offers an animation switch for immediate post-authentication release, plus optional maximum overlay timing with a 0.5–8.0 second slider and exact seconds field (#3). Automatic timing preserves existing animations; the enabled animation path retains its independent 360 ms release gate. Turning animations off skips both that cosmetic delay and the desktop splash, without changing PAM.
+- Successful Settings and preset saves explicitly reload the service configuration; closing Settings reloads it again, so applying changes does not depend only on filesystem notifications (#4). Add timing persistence/reopen and missed-file-watch regression checks, and clarify the one-time shell restart after installation or code updates.
+- Clarify the font mapping and distinguish the custom MARY logo artwork in example captures from the bundled UI fonts (#1).
+
+- Add an experimental standalone Wayland locker with real PAM password
+  authentication, compositor-confirmed background readiness, private runtime
+  ownership, source snapshots and bounded crash recovery. Keep a plain password
+  fallback independent of optional visuals and a fixed 360 ms authenticated
+  release gate. Add explicit user install/remove and separate managed PAM-policy
+  tools; never modify existing desktop/idle configuration automatically.
+- Add standalone guest authentication tests using QEMU keyboard and independent
+  desktop pixel/input witnesses, including wrong passwords and backend recovery.
+  Extend the driver for suspend/resume, virtual outputs and missing visuals;
+  distinguish implemented tests from verified per-distribution results.
+
+- Add an explicit disposable Arch lock-loss integration suite for the real
+  Hello Lock service, Omarchy Commons/Ui modules, Wayland locks and guest PAM.
+  Generated credentials reach only the QMP guest keyboard. Cover wrong and
+  correct passwords, forced lock loss/recovery, DPMS and virtual-output changes;
+  report recovery latency and distinguish guest PAM from physical fingerprints
+  and full Omarchy shell/plugin-manager coverage.
+
+- Re-request a session lock lost without authentication instead of clearing the
+  lock request and waking the desktop (#2). Recovery handles both lock-state
+  and secure-state loss, including secure-only notifications, and preserves
+  authenticated unlocks and the fixed visual release gate. Adapted from
+  upstream Omarchy PR #14988. This recovers after a loss; it cannot prevent the
+  compositor from dropping the lock or eliminate the exposure before recovery.
+
+- Add autonomous distro test profiles for Fedora, Ubuntu, Debian and CachyOS,
+  authenticated cloud-image sources, per-distro results and a sequential matrix.
+  CachyOS uses a separate guarded installation disk; new profiles remain
+  experimental until their full guest tests pass.
+
+- Add a private headless VM lab with verified user-local QEMU tools, generated
+  guest credentials, resource gating, cloud-init provisioning and QMP controls.
+  A compact 1 GiB guest starts its own Hyprland session and runs the standalone
+  visual suite without Omarchy. Add a host memory watchdog and abort cleanup
+  regression coverage. Standalone authentication now has a separate explicit suite.
+
+- Add a standalone technical preview for Settings and visual previews, using a
+  separate preferences profile and the shared branding/effect components.
+- Decouple visual theme tokens and focused-screen selection from Omarchy;
+  retain the plugin's live theme through its host adapter.
+- Add a native image chooser and path entry for standalone settings, plus
+  portability/profile and isolated Wayland runtime checks. Keep visual previews
+  independent of the standalone session-lock/PAM core.
+
 - Settings previews follow Hyprland's disabled animations in Automatic motion mode, while Full and Calm override the desktop preference immediately. The isolated preview also uses a disposable weather-cache path.
 - Settings has a new "Studio" layout: an icon rail of eight sections, the section's settings, and a live preview stage beside them that shows what they change. You types the greeting as you edit your name and status word (with a birthday preview); Logo shows your logo on a miniature lock screen and switches an image between theme and original colours; Unlock replays a short reveal and plays the chosen logo-to-symbol transition in place with the real transition file, follows Greeting and Background, and keeps a full-screen button for the real preview; Typing runs the real typing effect on your logo with pretend keystrokes (Type, Clear, a key scrubber); Lock screen plays the CRT power-down as a storyboard and shows the clock and Caps Lock badge; Sound puts every cue on one desk with waveforms precomputed by the new `sounds/peaks.py`, playheads, the Coin cue's hit markers and a level meter (each Play runs the sound helper once); Presets shows saved looks as a carousel; Weather outlines where the weather appears and states what leaves the machine. Colours come from the Omarchy theme (light themes included), reduced motion keeps fades only, idle previews stop, and the window scales down on smaller screens. Saving, presets, the menu entry and close behaviour are unchanged.
 - Two new Settings → Unlock options. **Greeting** (`greeting`) turns off the status line, greeting and weather/battery text, so the unlock is just the symbol (it settles, holds a beat and leaves, a little sooner than with text). **Background** (`unlockBackdrop`), when turned off, fades the blurred backdrop away right after you unlock, so the symbol animates over your live desktop and open windows; a soft dark halo behind the symbol keeps it readable on bright windows. Both default to on, apply to every unlock animation and to reduced motion, and leave the release gate and the lock-to-splash handoff frame unchanged.
