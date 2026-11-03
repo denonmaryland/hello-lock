@@ -411,6 +411,16 @@ Item {
     sessionLock.locked = true
   }
 
+  // Adapted from omacom/omarchy#14988. finishUnlock() clears the request
+  // before releasing the lock, so loss while still requested is not an unlock.
+  // Run after the signal returns: secure can drop before locked becomes false.
+  function relockLostLock() {
+    if (!lockRequested || pendingSessionLock || sessionLock.locked || sessionLock.secure) return
+
+    logEvent("lock-lost: relocking")
+    queueSessionLock()
+  }
+
   // ext-session-lock outlives its client, and a restart carries no lock over, so
   // a session locked this early may be an orphan behind Hyprland's failsafe. It
   // may also be another shell's live lock, which Hyprland would let this one
@@ -622,6 +632,8 @@ Item {
         sessionLockStabilizeTimer.stop()
         pendingSessionLockTimer.stop()
         root.startFingerprint()
+      } else {
+        Qt.callLater(root.relockLostLock)
       }
     }
 
@@ -633,15 +645,8 @@ Item {
         sessionLockStabilizeTimer.stop()
         pendingSessionLockTimer.stop()
         root.maybeStartPowerDown()
-      }
-
-      if (!locked && root.lockRequested) {
-        root.lockRequested = false
-        root.pendingSessionLock = false
-        sessionLockStabilizeTimer.stop()
-        pendingSessionLockTimer.stop()
-        root.resetAuthenticationState()
-        root.runWake()
+      } else {
+        Qt.callLater(root.relockLostLock)
       }
     }
 

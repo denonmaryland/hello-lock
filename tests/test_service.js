@@ -319,3 +319,88 @@ console.log('Symbol shuffle scenarios passed.');
   assert.equal(c.lockBranding.brand, 'Good');
 }
 console.log('Preset review regressions passed.');
+
+// Run the actual WlSessionLock signal handlers, including deferred checks.
+// Model secureStateChanged arriving before Quickshell clears locked, and the
+// 0.3.2 path where secure drops without a lockStateChanged notification.
+function lockLossContext() {
+  const c = context();
+  const deferred = [];
+  c.Qt.callLater = callback => deferred.push(callback);
+  c.flushDeferred = () => { while (deferred.length) deferred.shift()() };
+  c.Quickshell.screens = [{name: 'eDP-1', width: 1920, height: 1080}];
+  for (const signal of ['SecureState', 'LockState']) {
+    const handler = source.match(new RegExp(`    on${signal}Changed: \\{\\n([\\s\\S]*?)^    \\}`, 'm'));
+    assert.ok(handler, `${signal} handler exists`);
+    vm.runInContext(`function emit${signal}Changed() { const {locked, secure} = sessionLock; ${handler[1]}\n}`, c);
+  }
+  c.lockRequested = true;
+  return c;
+}
+for (const notifications of [['LockState'], ['SecureState'], ['SecureState', 'LockState']]) {
+  const c = lockLossContext();
+  c.sessionLock.locked = true; // Still true during secureStateChanged.
+  for (const signal of notifications) {
+    if (signal === 'LockState') c.sessionLock.locked = false;
+    c[`emit${signal}Changed`]();
+  }
+  assert.equal(c.pendingSessionLock, false, 'recovery waits for the lock object to settle');
+  c.sessionLock.locked = false;
+  let queued = 0;
+  const queue = c.queueSessionLock;
+  c.queueSessionLock = () => { queued++; queue() };
+  c.flushDeferred();
+  assert.equal(c.lockRequested, true, 'loss must preserve the lock request');
+  assert.equal(c.pendingSessionLock, true, 'loss must queue recovery');
+  assert.equal(queued, 1, 'duplicate loss notifications must not restart recovery');
+  assert.equal(c.wakeProcess.running, false, 'loss must not wake an unlocked desktop');
+  assert.equal(c.unlockGate.running, false, 'loss must not start an unlock');
+  c.requestSessionLock();
+  assert.equal(c.sessionLock.locked, false, 'recovery respects stabilization');
+  c.sessionLockStabilizeTimer.stop();
+  c.Quickshell.screens = [];
+  c.requestSessionLock();
+  assert.equal(c.sessionLock.locked, false, 'recovery waits for a real screen');
+  c.Quickshell.screens = [{name: 'eDP-1', width: 1920, height: 1080}];
+  c.requestSessionLock();
+  assert.equal(c.sessionLock.locked, true, 'recovery requests the compositor lock');
+  c.sessionLock.secure = true;
+  let fingerprintStarts = 0;
+  c.startFingerprint = () => { fingerprintStarts++ };
+  c.emitLockStateChanged();
+  c.emitSecureStateChanged();
+  assert.equal(c.pendingSessionLock, false);
+  assert.equal(c.pendingSessionLockTimer.running, false);
+  assert.equal(fingerprintStarts, 1, 'secure recovery resumes the existing fingerprint flow');
+}
+for (const phase of ['before-check', 'during-gate', 'after-unlock']) {
+  const c = lockLossContext();
+  c.sessionLock.locked = true;
+  c.finishUnlock(); // PAM success starts the existing gate.
+  assert.equal(c.unlockGate.running, true);
+  c.sessionLock.locked = false;
+  if (phase !== 'after-unlock') c.emitSecureStateChanged();
+  if (phase === 'during-gate') {
+    c.flushDeferred();
+    assert.equal(c.pendingSessionLock, true, 'loss during the gate still queues recovery');
+  }
+  c.unlockGateDone = true;
+  c.finishUnlock();
+  c.emitLockStateChanged();
+  c.emitSecureStateChanged();
+  c.flushDeferred();
+  assert.equal(c.lockRequested, false, `${phase}: authenticated unlock stays unlocked`);
+  assert.equal(c.pendingSessionLock, false);
+  assert.equal(c.sessionLockStabilizeTimer.running, false);
+  assert.equal(c.pendingSessionLockTimer.running, false);
+  assert.equal(c.sessionLock.locked, false);
+}
+{
+  const c = lockLossContext();
+  c.emitSecureStateChanged();
+  c.sessionLock.locked = true;
+  c.sessionLock.secure = true;
+  c.flushDeferred();
+  assert.equal(c.pendingSessionLock, false, 'a recovered lock must not be queued again');
+}
+console.log('Lock-loss recovery regressions passed (mock compositor; no real lock).');
