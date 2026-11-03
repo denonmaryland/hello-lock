@@ -620,6 +620,13 @@ def check_config(config_path, config_dir, plugin_dir):
         if isinstance(cfg.get("symbol"), str) and cfg["symbol"].strip():
             add(S, INFO, 'symbolParts is set, so "symbol" is not used')
 
+    if "unlockDuration" in cfg:
+        duration = cfg["unlockDuration"]
+        if type(duration) is not int or (duration != 0 and not 500 <= duration <= 8000):
+            add(S, ERROR, '"unlockDuration" must be 0 or 500–8000 whole milliseconds',
+                "0 keeps the natural animation timing; other values cap the overlay after release.",
+                'set "unlockDuration" to 0 or a whole number from 500 to 8000')
+
     motion = cfg.get("motion")
     motion = motion if isinstance(motion, str) else "auto"
     anim = hypr_animations()

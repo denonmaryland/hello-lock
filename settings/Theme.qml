@@ -1,7 +1,7 @@
 pragma Singleton
 import QtQuick
-import qs.Commons
-import qs.Commons as Commons
+import "../platform"
+import "../platform" as Commons
 
 // The Settings window's palette, type and motion. Every colour comes from the
 // Omarchy theme: the foundational roles directly, the surfaces and greys mixed

@@ -7,8 +7,8 @@ import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
-import qs.Commons
-import qs.Commons as Commons
+import "platform"
+import "platform" as Commons
 
 // Hello Lock settings ("Studio"): an icon rail of eight sections, the
 // section's controls, and a live preview stage on the right that shows what
@@ -22,8 +22,15 @@ Item {
   // Supplied by Service.qml.
   property string pluginDir: ""
   property string configDir: ""
+  property bool omarchyIntegration: true
+  property bool standaloneFeatures: false
+  readonly property bool weatherAvailable: omarchyIntegration || standaloneFeatures
+  readonly property string weatherCachePath: Quickshell.env("HELLO_STATUS_WEATHER_CACHE") || Quickshell.env("HOME") + "/.cache/hello-lock/weather.json"
+  readonly property string defaultLogoLabel: omarchyIntegration ? "Omarchy logo" : "Hello Lock logo"
+  property string defaultLogo: "/usr/share/omarchy/logo.svg"
   property string suggestedName: ""
   property var currentConfig: ({})
+  signal configSaved()
   // True while the service shows a preview: the window steps aside.
   property bool away: false
   // Optional: Hyprland animations are off. The local motion choice takes
@@ -78,6 +85,12 @@ Item {
   property bool legendary: true
   property bool greeting: true
   property bool unlockBackdrop: true
+  property bool unlockAnimation: true
+  property int unlockDuration: 0
+  property int customUnlockDuration: 2000
+  onUnlockDurationChanged: {
+    if (unlockDuration >= 500 && unlockDuration <= 8000) customUnlockDuration = unlockDuration
+  }
   property string typingEffect: "cells"
   property string handoff: "shuffle"
   property bool clock: true
@@ -96,6 +109,8 @@ Item {
   property int quietStart: 23
   property int quietEnd: 7
   property bool weather: true
+  property string weatherLocation: ""
+  property string weatherUnit: "auto"
 
   readonly property var wordmarkStyles: [
     { value: "omarchy", label: "Omarchy" }, { value: "blocks", label: "Blocks" },
@@ -164,7 +179,7 @@ Item {
   property int previewVersion: 0
   property bool picking: false
 
-  readonly property string omarchyLogo: "/usr/share/omarchy/logo.svg"
+  readonly property string omarchyLogo: defaultLogo
   readonly property string logoPreview: logoChoice === "wordmark" ? (wordmarkReady ? wordmarkPreview : "")
     : logoChoice === "image" ? imagePath : omarchyLogo
   readonly property bool logoTinted: logoChoice !== "image" || tintLogo
@@ -249,6 +264,10 @@ Item {
     legendary = c.legendary !== false
     greeting = c.greeting !== false
     unlockBackdrop = c.unlockBackdrop !== false
+    unlockAnimation = c.unlockAnimation !== false
+    unlockDuration = typeof c.unlockDuration === "number" && Number.isFinite(c.unlockDuration)
+      && c.unlockDuration >= 500 && c.unlockDuration <= 8000 ? Math.round(c.unlockDuration) : 0
+    customUnlockDuration = unlockDuration || 2000
     var effect = str(c.typingEffect).toLowerCase()
     typingEffect = typingEffects.some(function(e) { return e.id === effect }) ? effect : "cells"
     if (typingEffect !== "shuffle") typingPreview = typingEffect
@@ -259,9 +278,11 @@ Item {
     motion = c.motion === "reduced" || c.motion === "full" ? c.motion : "auto"
     sounds = c.sounds !== false
     typingSound = TypingSounds.normalize(c.typingSound)
-    weather = c.weather !== false
+    weather = omarchyIntegration ? c.weather !== false : c.weather === true
+    weatherLocation = str(c.weatherLocation).slice(0, 128)
+    weatherUnit = c.weatherUnit === "metric" || c.weatherUnit === "imperial" ? c.weatherUnit : "auto"
     soundGetProc.running = true
-    menuStatusProc.running = true
+    if (omarchyIntegration) menuStatusProc.running = true
     savedOnce = false
     confirmPresetDelete = false
     presetDeleteId = ""
@@ -317,6 +338,7 @@ Item {
       try {
         var section = root.sectionIndex
         root.currentConfig = JSON.parse(presetOutput.text)
+        root.configSaved()
         root.start()
         root.sectionIndex = section
         root.saveFailed = false
@@ -380,7 +402,7 @@ Item {
     onExited: root.menuState = String(menuStatusOut.text || "").trim()
   }
   function setMenu(on) {
-    if (menuProc.running) return
+    if (!omarchyIntegration || menuProc.running) return
     menuProc.command = [pluginDir + "/bin/hello-menu", on ? "add" : "remove"]
     status = "saving"
     menuProc.running = true
@@ -427,6 +449,7 @@ Item {
     onExited: function(code) {
       if (code === 0) {
         root.savedOnce = true
+        root.configSaved()
         if (Object.keys(root.pending).length > 0) { root.flush(); return }
         root.status = "saved"
         savedFade.restart()
@@ -564,9 +587,35 @@ Item {
 
   // The file chooser is a normal window, so this one steps aside until it returns.
   function pickImage() {
-    if (picking) return
+    if (picking || importProc.running) return
     picking = true
-    pickProc.running = true
+    if (omarchyIntegration) pickProc.running = true
+    else portablePicker.active = true
+  }
+  Loader {
+    id: portablePicker
+    active: false
+    source: "platform/FilePicker.qml"
+    onLoaded: item.open()
+    onStatusChanged: if (status === Loader.Error) {
+      root.picking = false
+      root.status = "File chooser unavailable. Enter an image path below."
+      active = false
+    }
+  }
+  function importImage(path) {
+    if (importProc.running || !String(path).trim()) return
+    importProc.command = [root.pluginDir + "/bin/hello-config", "import-logo", root.expand(String(path).trim())]
+    importProc.running = true
+  }
+  Connections {
+    target: portablePicker.item
+    function onChosen(path) {
+      portablePicker.active = false
+      importProc.command = [root.pluginDir + "/bin/hello-config", "import-logo", path]
+      importProc.running = true
+    }
+    function onCanceled() { portablePicker.active = false; root.picking = false }
   }
   Process {
     id: pickProc
@@ -750,7 +799,7 @@ Item {
               y: 14
               wrapMode: Text.WordWrap
               text: root.status === "saving" ? "Saving…"
-                : root.status === "saved" ? "Saved. Applies on your next lock."
+                : root.status === "saved" ? (root.omarchyIntegration || root.standaloneFeatures ? "Saved. Applies on your next lock." : "Saved. Available in previews.")
                 : root.status ? root.status : "Changes save as you make them."
               color: footer.failed ? Theme.alert : root.status === "saved" ? Theme.accent : Theme.muted
               font.pixelSize: 11
@@ -760,6 +809,7 @@ Item {
               id: setupLink
               anchors { right: parent.right; rightMargin: 28 }
               y: 15
+              visible: root.omarchyIntegration
               label: "Run the setup again"
               onClicked: root.requestExit("setup")
             }
@@ -1084,14 +1134,14 @@ Item {
     Column {
       id: logoColumn
       spacing: 24
-      readonly property var choices: [{ value: "wordmark", label: "Type a wordmark" }, { value: "image", label: "Use an image" }, { value: "omarchy", label: "Omarchy logo" }]
+      readonly property var choices: [{ value: "wordmark", label: "Type a wordmark" }, { value: "image", label: "Use an image" }, { value: "omarchy", label: root.defaultLogoLabel }]
 
       Column {
         width: parent.width
         spacing: 10
         GroupLabel {
           text: "SOURCE"
-          value: root.logoChoice === "wordmark" ? "Wordmark" : root.logoChoice === "image" ? "Image" : "Omarchy logo"
+          value: root.logoChoice === "wordmark" ? "Wordmark" : root.logoChoice === "image" ? "Image" : root.defaultLogoLabel
         }
         Segmented {
           options: logoColumn.choices
@@ -1163,6 +1213,13 @@ Item {
               icon: Icons.folder
               text: root.imagePath ? "Choose a different file…" : "Choose a file…"
               onClicked: root.pickImage()
+            }
+            InputField {
+              visible: !root.omarchyIntegration
+              width: parent.width
+              placeholderText: "Or enter an image path and press Enter"
+              enabled: !importProc.running
+              onAccepted: root.importImage(text)
             }
           }
         }
@@ -1256,7 +1313,7 @@ Item {
         GroupLabel { text: "COLOR" }
         ToggleRow {
           title: "Match my theme colors"
-          description: "Recolor the logo to your Omarchy theme. Turn off to keep a colored logo's own colors."
+          description: "Recolor the logo to your theme. Turn off to keep a colored logo's own colors."
           checked: root.tintLogo
           onToggled: { root.tintLogo = !root.tintLogo; root.save({ tintLogo: root.tintLogo }) }
         }
@@ -1271,6 +1328,75 @@ Item {
       id: unlockColumn
       spacing: 24
       property string hovered: ""
+
+      Column {
+        width: parent.width
+        spacing: 10
+        GroupLabel { text: "TIMING" }
+        ToggleRow {
+          title: "Unlock animation"
+          description: "Turn off to go straight to your desktop after authentication, without the handoff delay or splash."
+          checked: root.unlockAnimation
+          onToggled: { root.unlockAnimation = !root.unlockAnimation; root.save({ unlockAnimation: root.unlockAnimation }) }
+        }
+        ToggleRow {
+          title: "Automatic timing"
+          description: "Let each sequence finish naturally. Turn off to set a shorter time limit."
+          enabled: root.unlockAnimation
+          checked: root.unlockDuration === 0
+          onToggled: {
+            root.unlockDuration = root.unlockDuration ? 0 : root.customUnlockDuration
+            root.save({ unlockDuration: root.unlockDuration })
+          }
+        }
+        Column {
+          visible: root.unlockDuration > 0
+          enabled: root.unlockAnimation
+          opacity: enabled ? 1 : 0.45
+          width: parent.width
+          spacing: 10
+          UiText { text: "Maximum time on screen"; color: Theme.muted }
+          Row {
+            width: parent.width
+            spacing: 14
+            LineSlider {
+              width: parent.width - durationField.width - parent.spacing
+              anchors.verticalCenter: parent.verticalCenter
+              minimum: 500; maximum: 8000; step: 100
+              value: root.customUnlockDuration
+              onMoved: function(v) {
+                root.customUnlockDuration = Math.round(v); root.unlockDuration = root.customUnlockDuration
+                root.save({ unlockDuration: root.unlockDuration }, 200)
+              }
+              onReleased: function(v) { root.save({ unlockDuration: root.unlockDuration }) }
+              onStepped: function(v) { root.save({ unlockDuration: root.unlockDuration }) }
+            }
+            InputField {
+              id: durationField
+              width: 100
+              mono: true
+              size: 14
+              suffix: "s"
+              text: (root.customUnlockDuration / 1000).toFixed(1)
+              validator: DoubleValidator { bottom: 0.5; top: 8; decimals: 1; locale: "C"; notation: DoubleValidator.StandardNotation }
+              onEditingFinished: {
+                var ms = Math.round(Number(text) * 1000)
+                if (Number.isFinite(ms) && ms >= 500 && ms <= 8000) {
+                  root.customUnlockDuration = ms; root.unlockDuration = ms
+                  root.save({ unlockDuration: ms })
+                }
+                text = Qt.binding(function() { return (root.customUnlockDuration / 1000).toFixed(1) })
+              }
+            }
+          }
+          UiText {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "0.5–8.0 seconds after the desktop unlocks. The overlay may finish sooner; any key or click skips it."
+            color: Theme.muted
+          }
+        }
+      }
 
       Column {
         width: parent.width
@@ -1531,7 +1657,7 @@ Item {
         UiText {
           width: parent.width
           wrapMode: Text.WordWrap
-          text: root.motion === "auto" ? "Follows Hyprland: calm when animations are turned off."
+          text: root.motion === "auto" ? (root.standaloneFeatures ? "Follows Hyprland animations. Sway uses calm motion." : "Follows Hyprland: calm when animations are turned off.")
             : root.motion === "reduced" ? "Fades instead of big motion, on the lock screen and the unlock."
             : "Always the full animations."
           color: Theme.muted
@@ -1548,7 +1674,7 @@ Item {
         visible: root.menuState !== ""
         width: parent.width
         spacing: 2
-        GroupLabel { text: "SHORTCUT"; implicitHeight: 24 }
+        GroupLabel { visible: root.omarchyIntegration; text: "SHORTCUT"; implicitHeight: 24 }
         ToggleRow {
           visible: root.menuState === "on" || root.menuState === "off"
           title: "Show in the Omarchy menu"
@@ -1790,9 +1916,33 @@ Item {
         GroupLabel { text: "NETWORK"; implicitHeight: 22 }
         ToggleRow {
           title: "Weather after unlocking"
-          description: "Asks wttr.in for the temperature at most every 30 minutes, using Omarchy's weather location. wttr.in sees your IP address. Turn off and Hello Lock makes no network requests at all."
-          checked: root.weather
+          description: root.omarchyIntegration
+            ? "Uses wttr.in with a 30-minute cache and Omarchy's weather location. wttr.in sees your IP address. Turn off to disable weather requests."
+            : root.standaloneFeatures ? "Optional, off by default. Real locks use wttr.in with a 30-minute cache; the service sees your IP address and selected location. This Settings page uses sample weather."
+            : "This preview shows sample weather only. It makes no weather requests."
+          enabled: root.weatherAvailable
+          checked: root.weatherAvailable && root.weather
           onToggled: { root.weather = !root.weather; root.save({ weather: root.weather }) }
+        }
+      }
+      Column {
+        visible: root.standaloneFeatures && !root.omarchyIntegration
+        width: parent.width
+        spacing: 10
+        GroupLabel { text: "LOCATION AND UNITS" }
+        InputField {
+          width: parent.width
+          text: root.weatherLocation
+          maximumLength: 128
+          placeholderText: "Approximate location from my IP"
+          onTextEdited: { root.weatherLocation = text; root.save({ weatherLocation: text.trim() }, 600) }
+        }
+        UiText { width: parent.width; wrapMode: Text.WordWrap; text: "Enter a city, or leave empty to use approximate IP location. Weather stays off until you enable it."; color: Theme.muted }
+        Segmented {
+          width: parent.width
+          options: [{value: "auto", label: "System"}, {value: "metric", label: "Celsius"}, {value: "imperial", label: "Fahrenheit"}]
+          value: root.weatherUnit
+          onPicked: function(v) { root.weatherUnit = v; root.save({ weatherUnit: v }) }
         }
       }
       // What the setting means for privacy, stated plainly (read-only).
@@ -1816,15 +1966,20 @@ Item {
             x: 14
             width: parent.width - 28
             Repeater {
-              model: root.weather ? [
+              model: !root.weatherAvailable ? [
+                { key: "SENT", value: "Nothing. This is a visual preview." },
+                { key: "SEEN", value: "Nothing. No requests are made." },
+                { key: "CACHED", value: "No forecast is fetched." },
+                { key: "OTHER", value: "Settings show sample weather only." }
+              ] : root.weather ? [
                 { key: "SENT", value: "Your weather location and unit" },
                 { key: "SEEN", value: "Your IP address, by wttr.in" },
-                { key: "CACHED", value: "For 30 minutes, on this machine", note: "~/.cache/hello-lock/weather.json" },
+                { key: "CACHED", value: "For 30 minutes, on this machine", note: root.weatherCachePath },
                 { key: "OTHER", value: "Nothing else in Hello Lock connects." }
               ] : [
                 { key: "SENT", value: "Nothing. Weather is off." },
                 { key: "SEEN", value: "Nothing. No requests are made." },
-                { key: "CACHED", value: "Only an earlier forecast, if any", note: "~/.cache/hello-lock/weather.json" },
+                { key: "CACHED", value: "Only an earlier forecast, if any", note: root.weatherCachePath },
                 { key: "OTHER", value: "Nothing else in Hello Lock connects." }
               ]
               Item {
@@ -2081,7 +2236,7 @@ Item {
         width: parent.width
         elide: Text.ElideRight
         text: (presetRow.branding.wordmarkText ? "Wordmark · " + (presetRow.branding.wordmarkStyle || "blocks") + " style"
-          : presetRow.branding.logo ? "Image logo" : "Omarchy logo")
+          : presetRow.branding.logo ? "Image logo" : root.defaultLogoLabel)
           + (presetRow.branding.wordmarkText ? "" : presetRow.branding.tintLogo === false ? " · own colors" : " · theme colors")
         color: Theme.muted
         font.pixelSize: 12

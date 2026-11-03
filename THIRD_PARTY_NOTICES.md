@@ -39,5 +39,11 @@ the SIL Open Font License 1.1; see fonts/OFL-oxanium.txt and fonts/OFL-sharetech
 wordmark/delta-corps-priest-1.flf is the FIGlet font "Delta Corps Priest 1" by
 CoSMiC cHiLD, created with patorjk.com's FIGFont Editor
 (http://patorjk.com/figfont-editor). It is included unmodified with its original
-author header for the "omarchy" wordmark style, and is not covered by the MIT
-license above; all credit belongs to its author.
+author header for the "omarchy" wordmark style. Its bytes match the file in
+[patorjk/figlet.js at d29f4c1](https://github.com/patorjk/figlet.js/blob/d29f4c185973b745100b7b23d6ba6e2cdf764fb2/fonts/Delta%20Corps%20Priest%201.flf).
+That upstream repository distributes it under its
+[MIT license](https://github.com/patorjk/figlet.js/blob/d29f4c185973b745100b7b23d6ba6e2cdf764fb2/LICENSE.txt),
+copyright Patrick Gillespie and other contributors. The complete upstream
+notice is preserved in `wordmark/LICENSE-figlet.txt`; `wordmark/SOURCES.json`
+records the source revision and hashes. The author credit remains CoSMiC cHiLD;
+Hello Lock does not claim authorship of the font.

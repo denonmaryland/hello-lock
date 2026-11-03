@@ -118,12 +118,12 @@ Item {
     Placard {
       title: stage.wordmark ? (stage.s.wordmarkText.trim().toUpperCase() || "Wordmark")
         : stage.image ? (stage.s.brand.trim().toUpperCase() || stage.fileName.replace(/\.[^.]*$/, "") || "Your image")
-        : "Omarchy"
+        : stage.s.omarchyIntegration ? "Omarchy" : "Hello Lock"
       subtitle: stage.wordmark ? "WORDMARK · " + stage.s.wordmarkStyle.toUpperCase() + " STYLE"
         : stage.image ? "IMAGE · " + stage.fileName.toUpperCase()
-        : "OMARCHY LOGO · BUILT IN"
+        : stage.s.defaultLogoLabel.toUpperCase() + " · BUILT IN"
       legend: [
-        { label: "SOURCE", value: stage.wordmark ? "Your wordmark" : stage.image ? "Your image" : "Omarchy logo" },
+        { label: "SOURCE", value: stage.wordmark ? "Your wordmark" : stage.image ? "Your image" : stage.s.defaultLogoLabel },
         { label: "COLOR", value: stage.s.logoTinted ? "Matches theme" : "Logo's own", lit: true },
         { label: "WHILE TYPING", value: stage.s.typingEffect === "off" ? "Stays still"
           : stage.s.typingEffect === "shuffle" ? "A new effect each lock"

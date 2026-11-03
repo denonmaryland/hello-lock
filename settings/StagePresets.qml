@@ -21,7 +21,7 @@ Item {
     symbol: s.symbolFile(s.symbolChoice), symbol2: s.symbolChoice === "custom" && s.customSymbol && s.customSymbol.paths.length > 1 ? s.customSymbol.paths[1] : "",
     symbolTinted: s.symbolChoice === "logo" ? s.logoTinted : s.symbolChoice === "custom" ? s.tintLogo : true,
     symbolName: s.symbolLabel(s.symbolChoice),
-    logoName: s.logoChoice === "wordmark" ? "Wordmark" : s.logoChoice === "image" ? "Image" : "Omarchy logo",
+    logoName: s.logoChoice === "wordmark" ? "Wordmark" : s.logoChoice === "image" ? "Image" : s.defaultLogoLabel,
     colors: s.logoTinted ? "Match theme" : "Own colors"
   })
   readonly property int prevIndex: count > 2 ? (current - 1 + count) % count : current < 0 && count > 1 ? count - 1 : -1
@@ -43,7 +43,7 @@ Item {
       symbol: symbol, symbol2: parts.length > 1 ? s.expand(parts[1]) : "",
       symbolTinted: builtin ? true : sym || parts.length ? b.tintLogo !== false : tinted,
       symbolName: builtin ? (builtin === "shuffle" ? "Shuffle" : s.symbolLabel(builtin)) : sym || parts.length ? "Custom" : "Its logo",
-      logoName: b.wordmarkText ? "Wordmark" : b.logo ? "Image" : "Omarchy logo",
+      logoName: b.wordmarkText ? "Wordmark" : b.logo ? "Image" : s.defaultLogoLabel,
       colors: b.wordmarkText || b.tintLogo !== false ? "Match theme" : "Own colors"
     }
   }

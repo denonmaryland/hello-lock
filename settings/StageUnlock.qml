@@ -10,7 +10,7 @@ import "Icons.js" as Icons
 Item {
   id: stage
   property Item s: null
-  readonly property real total: 2.4
+  readonly property real total: s && s.unlockDuration > 0 ? Math.min(2.4, s.unlockDuration / 1000) : 2.4
   property real t: total
   property string mode: "unlock"
   property string playedHandoff: ""
@@ -59,12 +59,14 @@ Item {
   property bool effectRunning: false
 
   function playUnlock() {
+    if (!s.unlockAnimation) return
     finishTransition()
     mode = "unlock"
     if (s.sounds) s.playCue(s.legendary && gold ? "unlock-legendary" : "unlock-orbit")
     clock.restart()
   }
   function playTransition() {
+    if (!s.unlockAnimation) return
     finishTransition()
     var id = s.handoff === "shuffle" ? handoffIds[Math.floor(Math.random() * handoffIds.length)] : s.handoff
     playedHandoff = id
@@ -297,7 +299,9 @@ Item {
       Transport {
         anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 16 }
         label: stage.s.symbolLabel(stage.symbolId)
-        detail: stage.transition && stage.calm ? "Crossfade"
+        detail: !stage.s.unlockAnimation ? "Instant unlock · no splash"
+          : stage.s.unlockDuration > 0 ? "Up to " + (stage.s.unlockDuration / 1000).toFixed(1) + "s"
+          : stage.transition && stage.calm ? "Crossfade"
           : stage.transition && stage.s.handoff === "shuffle" ? "Shuffle → " + stage.handoffLabel(stage.playedHandoff)
           : stage.handoffLabel(stage.s.handoff)
         progress: stage.t / stage.total
@@ -312,12 +316,14 @@ Item {
           icon: Icons.play
           iconFilled: true
           text: "Play unlock"
+          enabled: stage.s.unlockAnimation
           onClicked: stage.playUnlock()
         }
         ActionButton {
           implicitHeight: 34
           icon: Icons.shuffle
           text: "Play transition"
+          enabled: stage.s.unlockAnimation
           onClicked: stage.playTransition()
         }
       }

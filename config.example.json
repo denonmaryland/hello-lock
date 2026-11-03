@@ -12,5 +12,7 @@
   "legendary": true,
   "greeting": true,
   "unlockBackdrop": true,
+  "unlockAnimation": true,
+  "unlockDuration": 0,
   "clock": true
 }

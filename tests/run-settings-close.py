@@ -19,6 +19,7 @@ import Quickshell.Io
 ShellRoot {
  id: root
  property string lastExit: ""
+ property int saveEvents: 0
  Loader {
   id: settings
   active: false
@@ -35,6 +36,7 @@ ShellRoot {
   target: settings.item
   function onClosed() { root.lastExit = "close"; settings.active = false }
   function onSetupRequested() { root.lastExit = "setup"; settings.active = false }
+  function onConfigSaved() { root.saveEvents += 1 }
  }
  Timer { interval: 60000; running: true; onTriggered: Qt.quit() }
  IpcHandler {
@@ -62,6 +64,10 @@ ShellRoot {
    else if (kind === "menu-on-close") { i.setMenu(true); i.requestExit("close") }
    else if (kind === "menu-off-close") { i.setMenu(false); i.requestExit("close") }
    else if (kind === "close") i.requestExit("close")
+   else if (kind === "timing") {
+    i.unlockAnimation = false; i.unlockDuration = 1300
+    i.save({unlockAnimation: false, unlockDuration: 1300}, 600); i.requestExit("close")
+   }
    else if (kind === "birthday") {
     i.birthMonth = "1"; i.birthDay = "14"; i.saveBirthday()
     i.birthMonth = "13"; i.saveBirthday(); i.requestExit("close")
@@ -82,6 +88,9 @@ ShellRoot {
   }
   function status(): string {
    return JSON.stringify({active: settings.active, lastExit: root.lastExit,
+    saveEvents: root.saveEvents,
+    unlockAnimation: settings.item ? settings.item.unlockAnimation : null,
+    unlockDuration: settings.item ? settings.item.unlockDuration : null,
     name: settings.item ? settings.item.name : "",
     presetBusy: settings.item ? settings.item.presetBusy : false,
     selectedPreset: settings.item ? settings.item.selectedPreset : "",
@@ -167,6 +176,20 @@ class SettingsClose(unittest.TestCase):
         self.wait_for(lambda: not json.loads(self.call("status"))["active"])
         self.assertEqual(json.loads(self.call("status"))["lastExit"], exit_action)
         return json.loads(self.config.read_text())
+
+    def test_unlock_timing_flushes_and_reopens_without_restart(self):
+        self.open({"weather": False, "futurePreference": "keep"})
+        before = json.loads(self.call("status"))["saveEvents"]
+        saved = self.edit_close("timing")
+        self.assertFalse(saved["unlockAnimation"])
+        self.assertEqual(saved["unlockDuration"], 1300)
+        self.assertFalse(saved["weather"])
+        self.assertEqual(saved["futurePreference"], "keep")
+        self.assertGreater(json.loads(self.call("status"))["saveEvents"], before)
+        self.open(saved)
+        state = json.loads(self.call("status"))
+        self.assertFalse(state["unlockAnimation"])
+        self.assertEqual(state["unlockDuration"], 1300)
 
     def test_failed_preset_blocks_first_close_but_allows_retry(self):
         self.open({"name": "Before", "brandingPresets": [{"id": "a", "name": "Existing", "branding": {}}]})

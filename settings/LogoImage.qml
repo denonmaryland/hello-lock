@@ -13,7 +13,12 @@ Item {
   property color color: Theme.lockText
   property int version: 0
   readonly property int status: image.status
-  readonly property real aspect: image.implicitHeight > 0 ? image.implicitWidth / image.implicitHeight : 0
+  // Measure once per asset, independent of the box that is sized from this
+  // ratio. Binding back to the raster size creates a loop in Unlock's stage.
+  property real intrinsicAspect: 0
+  readonly property real aspect: intrinsicAspect
+  onSourceChanged: intrinsicAspect = 0
+  onVersionChanged: intrinsicAspect = 0
   readonly property real paintedWidth: image.paintedWidth
   readonly property real paintedHeight: image.paintedHeight
 
@@ -24,6 +29,10 @@ Item {
     fillMode: Image.PreserveAspectFit
     sourceSize: Qt.size(Math.max(16, Math.round(logo.width * 2)), Math.max(16, Math.round(logo.height * 2)))
     asynchronous: true
+    onStatusChanged: {
+      if (status === Image.Ready && image.implicitHeight > 0 && logo.intrinsicAspect === 0)
+        logo.intrinsicAspect = image.implicitWidth / image.implicitHeight
+    }
     cache: false
     smooth: true
     visible: !logo.tinted

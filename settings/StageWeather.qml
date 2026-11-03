@@ -12,7 +12,7 @@ Item {
   property Item s: null
   readonly property real total: 1.3
   property real t: total
-  readonly property bool on: s.weather
+  readonly property bool on: s.weatherAvailable && s.weather
   readonly property string person: s.name.trim() || s.suggestedName || "friend"
   readonly property string statusWord: (s.brand.trim() ? s.brand.trim().toUpperCase() : "SYSTEM") + " ONLINE"
   readonly property string tod: {
@@ -45,7 +45,7 @@ Item {
   }
   NumberAnimation { id: clock; target: stage; property: "t"; from: 0; to: stage.total; duration: stage.total * 1000 }
   function setWeather(on) {
-    if (s.weather === on) return
+    if (!s.weatherAvailable || s.weather === on) return
     s.weather = on
     s.save({ weather: on })
   }
@@ -154,6 +154,7 @@ Item {
           onClicked: stage.play()
         }
         Segmented {
+          enabled: stage.s.weatherAvailable
           width: 224
           itemPadding: 5
           proportional: true
@@ -191,7 +192,7 @@ Item {
           MonoText {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
-            text: stage.on ? "≤ 1 request / 30 min" : "No requests"
+            text: stage.on ? "Cached for 30 min" : "No requests"
             tracking: 0.08
             size: 11
             color: stage.on ? Theme.fg : Theme.muted

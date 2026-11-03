@@ -2,9 +2,8 @@ import QtQuick
 import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
-import qs.Commons
-import qs.Commons as Commons
-import qs.Ui
+import "platform"
+import "platform" as Commons
 
 Item {
   id: root
@@ -25,6 +24,7 @@ Item {
   property bool authenticatingPassword: false
   property string failureMessage: ""
   property int failedAttempts: 0
+  property bool queryHyprland: true
   property bool inputEnabled: true
   property bool loadBackground: true
   property string passwordText: ""
@@ -214,7 +214,7 @@ Item {
   onWatchKeyboardChanged: if (watchKeyboard) { capsFile.reload(); refreshKeymap() }
 
   function refreshKeymap() {
-    if (!keymapProc.running) keymapProc.running = true
+    if (queryHyprland && !keymapProc.running) keymapProc.running = true
   }
 
   Process {

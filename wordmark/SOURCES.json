@@ -1,0 +1,8 @@
+{
+  "commit": "d29f4c185973b745100b7b23d6ba6e2cdf764fb2",
+  "sha256": "5065f00aa615c5e2fa18e9f7871628cb0384e9d9154d1531096e3adc0d84d41f",
+  "repository": "https://github.com/patorjk/figlet.js",
+  "font": "fonts/Delta Corps Priest 1.flf",
+  "license": "LICENSE.txt",
+  "license_sha256": "7176d13d6000cd46abd6a5bf39126b6adb51f3f4cb14b4311a236bf24b2f7dd2"
+}

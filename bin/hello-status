@@ -34,11 +34,15 @@ import sys
 import threading
 import time
 import urllib.parse
+import tempfile
 
 HOME = os.path.expanduser("~")
 NAME = "friend"
 BIRTHDAY = ""
 WEATHER = True
+STANDALONE = False
+LOCATION = ""
+UNIT = ""
 CACHE = os.environ.get("HELLO_STATUS_WEATHER_CACHE") or os.path.join(
     HOME, ".cache", "hello-lock", "weather.json")
 WEATHER_URL = os.environ.get("HELLO_STATUS_WEATHER_URL") or "https://wttr.in"
@@ -90,7 +94,10 @@ def battery():
 
 # ---------------------------------------------------------------- weather
 def weather_unit():
+    if UNIT in ("imperial", "metric"):
+        return UNIT
     try:
+        if STANDALONE: raise ValueError("Standalone locale")
         with open(os.path.join(HOME, ".config", "omarchy", "shell.json")) as f:
             cfg = json.load(f)
         layout = cfg.get("bar", {}).get("layout", {})
@@ -110,6 +117,8 @@ def weather_unit():
 
 
 def weather_query():
+    if STANDALONE:
+        return urllib.parse.quote(LOCATION, safe="")
     try:
         with open(os.path.join(HOME, ".local", "state", "omarchy", "settings",
                                "weather.json")) as f:
@@ -158,14 +167,32 @@ def load_cache(query, unit):
 
 
 def save_cache(query, unit, w):
+    tmp = None
     try:
         os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-        tmp = "%s.%d.tmp" % (CACHE, os.getpid())
-        with open(tmp, "w") as f:
+        descriptor, tmp = tempfile.mkstemp(dir=os.path.dirname(CACHE), prefix=".weather-")
+        with os.fdopen(descriptor, "w") as f:
             json.dump(dict(w, unit=unit, query=query, fetched=time.time()), f)
         os.replace(tmp, CACHE)
     except Exception:
         pass
+    finally:
+        if tmp:
+            try: os.remove(tmp)
+            except FileNotFoundError: pass
+
+
+def weather_allowed():
+    if not WEATHER: return False
+    if not STANDALONE: return True
+    # An old preview profile never opted in implicitly. Recheck before a
+    # detached refresh too, so disabling weather cancels future requests.
+    try:
+        folder = os.environ.get("HELLO_LOCK_CONFIG_DIR")
+        if not folder: return False
+        with open(os.path.join(folder, "config.json")) as stream:
+            return json.load(stream).get("weather") is True
+    except (OSError, ValueError, AttributeError): return False
 
 
 def spawn_background_refresh():
@@ -179,8 +206,12 @@ def spawn_background_refresh():
         os.makedirs(os.path.dirname(CACHE), exist_ok=True)
         with open(lock, "w"):
             pass
+        args = [sys.executable, "-I", os.path.abspath(__file__), "--refresh-weather"]
+        if STANDALONE:
+            args += ["--standalone", "--location", LOCATION]
+            if UNIT: args += ["--unit", UNIT]
         subprocess.Popen(
-            [sys.executable, "-I", os.path.abspath(__file__), "--refresh-weather"],
+            args,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
     except Exception:
@@ -188,6 +219,7 @@ def spawn_background_refresh():
 
 
 def weather():
+    if not weather_allowed(): return None, None
     unit, query = weather_unit(), weather_query()
     cached, age = load_cache(query, unit)
     if cached is not None and 0 <= age < FRESH_S:
@@ -206,7 +238,7 @@ def weather():
 def refresh_weather_main():
     unit, query = weather_unit(), weather_query()
     try:
-        w = fetch_weather(query, unit, BG_TIMEOUT)
+        w = fetch_weather(query, unit, BG_TIMEOUT) if weather_allowed() else None
         if w:
             save_cache(query, unit, w)
     finally:
@@ -320,7 +352,7 @@ def main():
 
 
 def parse_args(argv):
-    global NAME, BIRTHDAY, WEATHER
+    global NAME, BIRTHDAY, WEATHER, STANDALONE, LOCATION, UNIT
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -333,13 +365,23 @@ def parse_args(argv):
         elif a == "--no-weather":
             WEATHER = False
             i += 1
+        elif a == "--standalone":
+            STANDALONE = True
+            os.umask(0o077)
+            i += 1
+        elif a == "--location" and i + 1 < len(argv):
+            LOCATION = " ".join(argv[i + 1].split())[:128]
+            i += 2
+        elif a == "--unit" and i + 1 < len(argv):
+            UNIT = argv[i + 1] if argv[i + 1] in ("metric", "imperial") else ""
+            i += 2
         else:
             i += 1
 
 
 if __name__ == "__main__":
     parse_args(sys.argv[1:])
-    if sys.argv[1:] == ["--refresh-weather"]:
+    if "--refresh-weather" in sys.argv[1:]:
         try:
             refresh_weather_main()
         except Exception:

@@ -23,6 +23,30 @@ def load_helper(name):
 
 
 class Helpers(unittest.TestCase):
+    def test_unlock_timing_is_validated_before_any_write(self):
+        self.cfg.write_text('{"weather": false, "futurePreference": "keep"}')
+        for key, value in (("unlockAnimation", "false"), ("unlockAnimation", 0),
+                           ("unlockDuration", True), ("unlockDuration", 499),
+                           ("unlockDuration", 8001), ("unlockDuration", 1500.5),
+                           ("unlockDuration", "2000")):
+            before = self.cfg.read_bytes()
+            result = self.run_helper("hello-config", "save", json.dumps({key: value}))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.cfg.read_bytes(), before)
+            self.assertEqual(list(self.cfg.parent.glob('config.json.bak.*')), [])
+        for milliseconds in (0, 500, 1700, 8000):
+            result = self.run_helper("hello-config", "save", json.dumps({"unlockAnimation": False, "unlockDuration": milliseconds}))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            saved = json.loads(self.cfg.read_text())
+            self.assertFalse(saved["unlockAnimation"])
+            self.assertEqual(saved["unlockDuration"], milliseconds)
+            self.assertFalse(saved["weather"])
+            self.assertEqual(saved["futurePreference"], "keep")
+        result = self.run_helper("hello-config", "save", '{"unlockAnimation": null, "unlockDuration": null}')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("unlockAnimation", json.loads(self.cfg.read_text()))
+        self.assertNotIn("unlockDuration", json.loads(self.cfg.read_text()))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

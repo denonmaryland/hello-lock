@@ -3,11 +3,15 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import "plugin" as Hello
+import qs.Commons as DesktopTheme
+import "plugin/platform" as Platform
 
 // Launched by run-preview.py in a disposable config root. Only visual types
 // are instantiated. Service.qml is compiled, never created (no PAM/locking).
 ShellRoot {
   id: root
+  Binding { target: Platform.Color; property: "source"; value: DesktopTheme.Color }
+  Binding { target: Platform.Style; property: "source"; value: DesktopTheme.Style }
   property var serviceComponent
   Component.onCompleted: {
     serviceComponent = Qt.createComponent("plugin/Service.qml")
@@ -175,6 +179,11 @@ ShellRoot {
       splash.play(index, {awaySeconds: 3600, motion: reduced ? "reduced" : "full", greeting: greeting, backdrop: backdrop})
       return "ok"
     }
+    function unlockTimed(index: int, reduced: bool, milliseconds: int): string {
+      timeout.restart(); preview.visible = false; setup.active = false
+      splash.play(index, {awaySeconds: 3600, motion: reduced ? "reduced" : "full", maxDuration: milliseconds})
+      return "ok"
+    }
     // Settings window with `config` (JSON) as the saved settings; `section`
     // picks the rail's page (0-7).
     function settings(config: string, section: int): string {
@@ -195,6 +204,7 @@ ShellRoot {
       var i = settings.item
       return JSON.stringify({status: i.status, name: i.name, logo: i.logoChoice, symbol: i.symbolChoice,
         custom: !!i.customSymbol, effect: i.typingEffect, motion: i.motion, volume: i.volume,
+        unlockAnimation: i.unlockAnimation, unlockDuration: i.unlockDuration,
         quiet: [i.quietHours, i.quietStart, i.quietEnd], saved: savedConfig.text()})
     }
     function settingsSet(key: string, value: string): string {

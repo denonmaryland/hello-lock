@@ -404,3 +404,45 @@ for (const phase of ['before-check', 'during-gate', 'after-unlock']) {
   assert.equal(c.pendingSessionLock, false, 'a recovered lock must not be queued again');
 }
 console.log('Lock-loss recovery regressions passed (mock compositor; no real lock).');
+
+// Instant mode removes only cosmetics; failure still cannot release the lock.
+for (const brokenSplash of [false, true]) {
+  const c = context();
+  c.lockRequested = true;
+  c.sessionLock.locked = true;
+  c.config.unlockAnimation = false;
+  c.unlockSplashLoader.item = {
+    prime() { assert.fail('instant unlock must not prime a splash') },
+    play() { assert.fail('instant unlock must not play a splash') },
+    finish() { if (brokenSplash) throw Error('broken optional splash') }
+  };
+  c.handlePasswordFailure();
+  assert.equal(c.sessionLock.locked, true);
+  assert.equal(c.unlockGate.running, false);
+  c.finishUnlock(); // The private PAM-success path.
+  assert.equal(c.sessionLock.locked, false);
+  assert.equal(c.lockRequested, false);
+  assert.equal(c.unlockGate.running, false);
+  assert.equal(c.unlockTransition, false);
+  assert.equal(c.realUnlockSplash, false);
+}
+{
+  const c = context();
+  c.configFile = {reloads: 0, reload() { this.reloads++ }};
+  c.settingsOpen = true;
+  const saved = source.match(/function onConfigSaved\(\) \{([^\n]*)\}/);
+  const closed = source.match(/function onClosed\(\) \{( configFile.reload\(\); root.settingsOpen = false )\}/);
+  assert.ok(saved && closed);
+  vm.runInContext(saved[1], c);
+  assert.equal(c.configFile.reloads, 1, 'successful save explicitly reloads even if a file-change notification is missed');
+  vm.runInContext(closed[1], c);
+  assert.equal(c.configFile.reloads, 2);
+  assert.equal(c.settingsOpen, false);
+  c.tryUnlockTimer = {restart() { this.restarted = true }};
+  const setup = source.match(/function onTryUnlockRequested\(\) \{([^\n]*)\}/);
+  assert.ok(setup);
+  vm.runInContext(setup[1], c);
+  assert.equal(c.configFile.reloads, 3, 'saved setup explicitly reloads before its demo');
+  assert.equal(c.tryUnlockTimer.restarted, true);
+}
+console.log('Instant unlock and explicit configuration reload regressions passed.');

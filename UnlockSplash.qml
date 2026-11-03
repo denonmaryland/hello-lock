@@ -2,10 +2,9 @@ import QtQuick
 import QtQuick.Effects
 import QtQuick.Shapes
 import Quickshell
-import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
-import qs.Commons as Commons
+import "platform" as Commons
 // Logo handoff transitions, loaded by name; imported so the shell knows the
 // folder and its shared types (HandoffEffect, Piece).
 import "handoff" as Handoff
@@ -47,6 +46,10 @@ Item {
   // symbol plays over the live desktop.
   property bool greetingEnabled: true
   property bool backdropEnabled: true
+  // Maximum visible playback time in ms; zero keeps the natural sequence.
+  // This is cosmetic only and never controls the session-lock release.
+  property int maxDuration: 0
+  property int playDuration: 0
   property bool showText: true
   property bool clearBackdrop: false
   // Sound for the current play (unlock-<variant>, unlock-legendary, unlock-short).
@@ -68,6 +71,8 @@ Item {
   }
   // Set by the lock service from ~/.config/hello-lock/config.json.
   property string userName: "friend"
+  // Host-supplied focused screen; absent means the first screen is primary.
+  property string activeScreenName: ""
   // Optional word for the first status line (e.g. "ADA ONLINE"); empty = "SYSTEM".
   property string brand: ""
   // One image (the whole symbol) or two (outer + inner part, animated separately).
@@ -405,10 +410,13 @@ Item {
   // anything else picks from the bag with a rare legendary roll.
   function play(forcedVariant, context) {
     var ctx = (context && typeof context === "object") ? context : ({})
+    var limit = typeof ctx.maxDuration === "number" ? ctx.maxDuration : maxDuration
+    playDuration = Number.isFinite(limit) && limit >= 500 && limit <= 8000 ? Math.round(limit) : 0
+    durationLimit.stop()
     symbolOverride = (typeof ctx.symbol === "string" && knowsSymbol(ctx.symbol)) ? ctx.symbol : ""
     calm = ctx.motion === "reduced" || (ctx.motion !== "full" && reducedMotion)
     forceSecondary = ctx.secondary === true
-    focusedScreen = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
+    focusedScreen = activeScreenName
     // A primed stage is already up under the lock; only an unprimed one fades in.
     stageFadeIn = calm && !shown
     if (!shown) prime(true)
@@ -440,6 +448,7 @@ Item {
     playing = true
     playToken += 1
     safetyTimer.restart()
+    if (playDuration > 0) durationLimit.restart()
     soundRequested(lastSound)
     console.log("hello-lock splash: " + (shortMode ? "short" : variantNames[variant])
       + (calm && !shortMode ? " (reduced motion)" : "") + (symbolOverride ? " symbol=" + symbolOverride : "")
@@ -457,11 +466,18 @@ Item {
     playing = false
     shown = false
     safetyTimer.stop()
+    durationLimit.stop()
     symbolOverride = ""
   }
 
   // Never let the overlay outlive a failed or stalled animation. Longest full
   // run is legendary + telemetry (~6.5s), so this leaves >1.5s of margin.
+  Timer {
+    id: durationLimit
+    interval: root.playDuration > 0 ? root.playDuration : 8000
+    onTriggered: root.finish()
+  }
+
   Timer {
     id: safetyTimer
     interval: 8500

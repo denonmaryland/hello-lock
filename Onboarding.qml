@@ -3,7 +3,7 @@ import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
-import qs.Commons as Commons
+import "platform" as Commons
 
 // First-run setup for Hello Lock: name, birthday, a logo (a typed wordmark in
 // the Omarchy logo's style, an image, or the Omarchy logo), the unlock symbol

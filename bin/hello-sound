@@ -15,7 +15,7 @@
 # Always returns immediately and exits 0.
 
 SOUND_DIR="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/sounds"
-CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hello-lock"
+CONF_DIR="${HELLO_LOCK_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/hello-lock}"
 CONF="$CONF_DIR/sound.conf"
 
 QUIET_START=23

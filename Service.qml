@@ -4,12 +4,16 @@ import "TypingSounds.js" as TypingSounds
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Pam
+import "platform" as Platform
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 
 Item {
   id: root
+
+  Binding { target: Platform.Color; property: "source"; value: Commons.Color }
+  Binding { target: Platform.Style; property: "source"; value: Commons.Style }
 
   property var shell: null
   property string omarchyPath: ""
@@ -55,7 +59,8 @@ Item {
   readonly property var configDefaults: ({
     name: "", brand: "", logo: "", symbol: "", symbolParts: [], tintLogo: true,
     birthday: "", sounds: true, weather: true, powerDown: true, legendary: true, clock: true,
-    motion: "auto", typingEffect: "cells", typingSound: "shuffle", handoff: "shuffle", greeting: true, unlockBackdrop: true, brandingPresets: [], presetMode: "manual", selectedPreset: ""
+    motion: "auto", typingEffect: "cells", typingSound: "shuffle", handoff: "shuffle", greeting: true, unlockBackdrop: true,
+    unlockAnimation: true, unlockDuration: 0, brandingPresets: [], presetMode: "manual", selectedPreset: ""
   })
   property var userConfig: ({})
   property string accountName: ""
@@ -527,7 +532,8 @@ Item {
     // Hello Lock: only reached after PAM success. Dim the lock view and map the
     // splash under the lock first, so release reveals the splash rather than
     // the desktop. The gate is a fixed timer: it delays release, never blocks it.
-    if (!unlockGateDone) {
+    var animated = config.unlockAnimation !== false
+    if (animated && !unlockGateDone) {
       if (unlockGate.running) return
       unlockTransition = true
       realUnlockSplash = true
@@ -536,6 +542,7 @@ Item {
       return
     }
     unlockGateDone = false
+    unlockGate.stop()
 
     lockRequested = false
     pendingSessionLock = false
@@ -547,7 +554,13 @@ Item {
     logEvent("unlocked")
     runWake()
     unlockTransition = false
-    try { if (unlockSplashLoader.item) unlockSplashLoader.item.play(-1, root.splashContext()) } catch (e) { console.warn("unlock splash play failed: " + e) }
+    try {
+      if (unlockSplashLoader.item) {
+        if (animated) unlockSplashLoader.item.play(-1, root.splashContext())
+        else unlockSplashLoader.item.finish()
+      }
+    } catch (e) { console.warn("unlock splash play failed: " + e) }
+    if (!animated) realUnlockSplash = false
     clearSnapshots()
   }
 
@@ -759,6 +772,14 @@ Item {
     }
   }
 
+  Loader { id: monitorAdapter; source: "adapters/omarchy/FocusedMonitor.qml" }
+  Binding {
+    target: unlockSplashLoader.item
+    property: "activeScreenName"
+    value: monitorAdapter.item ? monitorAdapter.item.name : ""
+    when: unlockSplashLoader.status === Loader.Ready
+  }
+
   // Loaded indirectly so a broken splash can never stop the lock service loading.
   Loader {
     id: unlockSplashLoader
@@ -866,6 +887,7 @@ Item {
   Binding { target: unlockSplashLoader.item; property: "legendaryEnabled"; value: root.config.legendary !== false; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "greetingEnabled"; value: root.config.greeting !== false; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "backdropEnabled"; value: root.config.unlockBackdrop !== false; when: unlockSplashLoader.status === Loader.Ready }
+  Binding { target: unlockSplashLoader.item; property: "maxDuration"; value: typeof root.config.unlockDuration === "number" ? root.config.unlockDuration : 0; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "symbolName"; value: root.symbolName; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "pluginDir"; value: root.pluginDir; when: unlockSplashLoader.status === Loader.Ready }
   Binding { target: unlockSplashLoader.item; property: "reducedMotion"; value: root.reducedMotion; when: unlockSplashLoader.status === Loader.Ready }
@@ -1113,9 +1135,9 @@ Item {
   Connections {
     target: onboardingLoader.item
     ignoreUnknownSignals: true
-    function onClosed() { root.onboardingOpen = false }
+    function onClosed() { configFile.reload(); root.onboardingOpen = false }
     function onDismissed() { onboardingDoneProc.running = true }
-    function onTryUnlockRequested() { tryUnlockTimer.restart() }
+    function onTryUnlockRequested() { configFile.reload(); tryUnlockTimer.restart() }
   }
 
   Process {
@@ -1178,7 +1200,8 @@ Item {
   Connections {
     target: settingsLoader.item
     ignoreUnknownSignals: true
-    function onClosed() { root.settingsOpen = false }
+    function onConfigSaved() { configFile.reload() }
+    function onClosed() { configFile.reload(); root.settingsOpen = false }
     function onSetupRequested() { root.settingsOpen = false; root.openOnboarding() }
     function onUnlockPreviewRequested(symbol, handoff) {
       if (root.currentlyLocked() || !unlockSplashLoader.item) return

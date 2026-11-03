@@ -29,8 +29,9 @@ import sys
 import tempfile
 import subprocess
 import datetime
+import runpy
 
-CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "hello-lock")
+CONFIG_DIR = os.environ.get("HELLO_LOCK_CONFIG_DIR") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "hello-lock")
 CONFIG = os.path.join(CONFIG_DIR, "config.json")
 STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "hello-lock")
 DONE = os.path.join(STATE_DIR, "onboarded")
@@ -40,7 +41,8 @@ KEEP_BACKUPS = 10
 IMAGE_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED = {"name", "brand", "logo", "symbol", "symbolParts", "tintLogo", "birthday", "wordmarkStyle",
            "sounds", "weather", "powerDown", "legendary", "clock", "wordmarkText", "motion",
-           "typingEffect", "typingSound", "handoff", "greeting", "unlockBackdrop", "brandingPresets", "presetMode", "selectedPreset"}
+           "typingEffect", "typingSound", "handoff", "greeting", "unlockBackdrop", "unlockAnimation", "unlockDuration",
+           "brandingPresets", "presetMode", "selectedPreset", "weatherLocation", "weatherUnit"}
 
 
 def atomic_write(path, text):
@@ -72,6 +74,15 @@ def save(raw, backup=True):
     update = json.loads(raw)
     if not isinstance(update, dict):
         sys.exit("hello-config: expected a JSON object")
+    if update.get("weatherLocation") is not None and (not isinstance(update["weatherLocation"], str) or len(update["weatherLocation"]) > 128):
+        raise ValueError("weatherLocation must be text of at most 128 characters")
+    if update.get("weatherUnit") is not None and update["weatherUnit"] not in ("auto", "metric", "imperial"):
+        raise ValueError("weatherUnit must be auto, metric or imperial")
+    if update.get("unlockAnimation") is not None and not isinstance(update["unlockAnimation"], bool):
+        raise ValueError("unlockAnimation must be true or false")
+    duration = update.get("unlockDuration")
+    if duration is not None and (type(duration) is not int or (duration != 0 and not 500 <= duration <= 8000)):
+        raise ValueError("unlockDuration must be 0 (automatic) or whole milliseconds from 500 to 8000")
     if "brandingPresets" in update and update["brandingPresets"] is not None:
         validate_presets(update["brandingPresets"])
     try:
@@ -284,6 +295,10 @@ def presets(action, value):
         print(f.read())
 
 def main(argv):
+    if len(argv) == 3 and argv[1] == "lock-plan":
+        module = runpy.run_path(os.path.join(os.path.dirname(os.path.realpath(__file__)), "lock_plan.py"))
+        print(json.dumps(module["run"](CONFIG_DIR, argv[2], validate_presets, atomic_write)))
+        return
     if len(argv) >= 2 and argv[1] == "doctor":
         doctor = os.path.join(os.path.dirname(os.path.realpath(__file__)), "hello-lock-doctor")
         os.execv(sys.executable, [sys.executable, "-I", doctor] + argv[2:])
