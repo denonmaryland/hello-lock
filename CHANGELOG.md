@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.3 — 2026-11-05
 
 - The Caps Lock badge and the failure hint now work on keyboards with no Caps
   Lock LED. Caps Lock is read from `hyprctl devices -j` (the main keyboard,
