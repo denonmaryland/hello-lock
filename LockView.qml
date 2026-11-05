@@ -198,10 +198,14 @@ Item {
   }
 
   // ---- Caps Lock and keyboard layout (for the hint after repeated failures).
-  // capsOverride: preview-only (-1 = read the LED, 0/1 = forced).
+  // capsOverride: preview-only (-1 = read the keyboard, 0/1 = forced).
+  // capsHypr: Caps Lock as hyprctl reports it (-1 = unknown, then the LED
+  // decides; keyboards without a Caps Lock LED only show up in hyprctl).
   property int capsOverride: -1
+  property int capsHypr: -1
   property bool capsLed: false
-  readonly property bool capsLock: capsOverride >= 0 ? capsOverride > 0 : capsLed
+  readonly property bool capsLock: capsOverride >= 0 ? capsOverride > 0
+    : (capsHypr >= 0 ? capsHypr > 0 : capsLed)
   property string capsLedPath: ""
   property string activeKeymap: ""
   property int layoutCount: 1
@@ -212,6 +216,16 @@ Item {
   readonly property string statusLine: "ACCESS DENIED · ATTEMPT " + Math.max(1, failedAttempts)
 
   onWatchKeyboardChanged: if (watchKeyboard) { capsFile.reload(); refreshKeymap() }
+
+  // Caps Lock from the `hyprctl devices -j` keyboards: the main keyboard when
+  // it reports one, else on if any keyboard does. -1 when none reports.
+  function hyprCaps(kbs) {
+    var main = kbs.filter(function(k) { return k && k.main && typeof k.capsLock === "boolean" })[0]
+    if (main) return main.capsLock ? 1 : 0
+    var reported = kbs.filter(function(k) { return k && typeof k.capsLock === "boolean" })
+    if (reported.length === 0) return -1
+    return reported.some(function(k) { return k.capsLock }) ? 1 : 0
+  }
 
   function refreshKeymap() {
     if (queryHyprland && !keymapProc.running) keymapProc.running = true
@@ -228,6 +242,8 @@ Item {
   }
 
   // sysfs has no change notifications; re-read the LED while the lock shows.
+  // The same tick re-queries hyprctl (the keymap process), which also covers
+  // keyboards that have no LED.
   FileView {
     id: capsFile
     path: root.capsLedPath
@@ -238,8 +254,11 @@ Item {
   Timer {
     interval: 400
     repeat: true
-    running: root.watchKeyboard && root.capsLedPath.length > 0
-    onTriggered: capsFile.reload()
+    running: root.watchKeyboard && (root.capsLedPath.length > 0 || root.queryHyprland)
+    onTriggered: {
+      if (root.capsLedPath.length > 0) capsFile.reload()
+      root.refreshKeymap()
+    }
   }
 
   Process {
@@ -256,7 +275,9 @@ Item {
             count = Math.max(count, String(kbs[i].layout || "").split(",").filter(function(s) { return s.trim() }).length)
           root.layoutCount = count
           root.activeKeymap = main ? String(main.active_keymap || "") : ""
+          root.capsHypr = root.hyprCaps(kbs)
         } catch (e) {
+          root.capsHypr = -1
           root.layoutCount = 1
           root.activeKeymap = ""
         }

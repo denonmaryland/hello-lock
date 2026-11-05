@@ -496,3 +496,41 @@ console.log('Instant unlock and explicit configuration reload regressions passed
     'every wallpaper consumer draws the resolved path');
 }
 console.log('Video wallpaper poster regressions passed (no QML instantiated).');
+
+// Caps Lock without a keyboard LED: hyprctl's per-keyboard capsLock decides,
+// the LED is the fallback, and the preview override always wins.
+{
+  const view = fs.readFileSync(path.join(rootDir, 'LockView.qml'), 'utf8');
+  const fn = view.match(/^  function hyprCaps\(kbs\) \{\n[\s\S]*?^  \}/m);
+  const binding = view.match(/readonly property bool capsLock: ([^\n]*\n[^\n]*)/);
+  assert.ok(fn && binding);
+  const scope = vm.createContext({});
+  vm.runInContext(fn[0].replace('  function hyprCaps', 'function hyprCaps'), scope);
+  const caps = (state) => vm.runInNewContext(`(${binding[1]})`, state);
+  const parse = (json) => scope.hyprCaps(JSON.parse(json).keyboards || []);
+  const kb = (extra) => Object.assign({name: 'k', main: false}, extra);
+
+  assert.equal(scope.hyprCaps([kb({main: true, capsLock: true})]), 1);
+  assert.equal(scope.hyprCaps([kb({main: true, capsLock: false})]), 0);
+  // main is preferred over a secondary keyboard, either way round
+  assert.equal(scope.hyprCaps([kb({capsLock: true}), kb({main: true, capsLock: false})]), 0);
+  assert.equal(scope.hyprCaps([kb({capsLock: false}), kb({main: true, capsLock: true})]), 1);
+  // no main marked: any keyboard that reports it
+  assert.equal(scope.hyprCaps([kb({capsLock: false}), kb({capsLock: true})]), 1);
+  assert.equal(scope.hyprCaps([kb({capsLock: false}), kb({capsLock: false})]), 0);
+  // nothing usable: unknown, so the LED decides
+  assert.equal(parse('{}'), -1);
+  assert.equal(parse('{"keyboards":[]}'), -1);
+  assert.equal(scope.hyprCaps([kb({main: true})]), -1);
+
+  const state = (o) => Object.assign({capsOverride: -1, capsHypr: -1, capsLed: false}, o);
+  assert.equal(caps(state({capsHypr: 1})), true, 'hyprctl on, no LED');
+  assert.equal(caps(state({capsHypr: 0, capsLed: true})), false, 'hyprctl is authoritative when it reports');
+  assert.equal(caps(state({capsLed: true})), true, 'LED fallback when hyprctl fails');
+  assert.equal(caps(state({})), false);
+  assert.equal(caps(state({capsOverride: 1, capsHypr: 0})), true, 'override forces on');
+  assert.equal(caps(state({capsOverride: 0, capsHypr: 1, capsLed: true})), false, 'override forces off');
+  // a failed query resets to unknown
+  assert.match(view, /catch \(e\) \{\n\s+root\.capsHypr = -1/);
+}
+console.log('Caps Lock hyprctl regressions passed.');

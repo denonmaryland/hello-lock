@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The Caps Lock badge and the failure hint now work on keyboards with no Caps
+  Lock LED. Caps Lock is read from `hyprctl devices -j` (the main keyboard,
+  else any keyboard that reports it) on the existing 400 ms refresh; the LED is
+  still the fallback when hyprctl is unavailable or lists no keyboards. No
+  change to the password, fingerprint or PAM code.
+
 ## 0.6.2 — 2026-11-05
 
 - Waking from sleep no longer flashes the desktop before the lock screen.
