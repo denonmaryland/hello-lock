@@ -209,7 +209,7 @@ class SettingsClose(unittest.TestCase):
         self.open()
         self.wait_for(lambda: json.loads(self.call("status"))["menuState"] == "on")
         self.edit_close("menu-off-close")
-        self.assertNotIn("style.lockscreen", menu.read_text())
+        self.assertNotIn("omarchy-shell lock settings", menu.read_text())
 
     def test_invalid_presets_do_not_interrupt_personal_settings(self):
         for bad in ([None], [{"id": "a", "name": 7, "branding": {}}], "not a list"):

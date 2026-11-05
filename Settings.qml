@@ -282,7 +282,7 @@ Item {
     weatherLocation = str(c.weatherLocation).slice(0, 128)
     weatherUnit = c.weatherUnit === "metric" || c.weatherUnit === "imperial" ? c.weatherUnit : "auto"
     soundGetProc.running = true
-    if (omarchyIntegration) menuStatusProc.running = true
+    if (omarchyIntegration) { menuStatusProc.running = true; menuSectionProc.running = true }
     savedOnce = false
     confirmPresetDelete = false
     presetDeleteId = ""
@@ -392,7 +392,8 @@ Item {
     }
   }
 
-  // ---- The Omarchy menu entry (Style > Lock Screen) that opens this window.
+  // ---- The Omarchy menu entry (Appearance > Lock Screen; Style on Omarchy
+  // 4.0) that opens this window.
   // "on", "off", "other" (a different entry is there) or "unreadable".
   property string menuState: ""
   Process {
@@ -400,6 +401,18 @@ Item {
     command: [root.pluginDir + "/bin/hello-menu", "status"]
     stdout: StdioCollector { id: menuStatusOut; waitForEnd: true }
     onExited: root.menuState = String(menuStatusOut.text || "").trim()
+  }
+  // The installed Omarchy's name for that section: "Appearance" on 4.5,
+  // "Style" on 4.0. Only ever one of those two words.
+  property string menuSection: "Style"
+  Process {
+    id: menuSectionProc
+    command: [root.pluginDir + "/bin/hello-menu", "section"]
+    stdout: StdioCollector { id: menuSectionOut; waitForEnd: true }
+    onExited: {
+      var label = String(menuSectionOut.text || "").trim()
+      if (label === "Appearance" || label === "Style") root.menuSection = label
+    }
   }
   function setMenu(on) {
     if (!omarchyIntegration || menuProc.running) return
@@ -1678,7 +1691,7 @@ Item {
         ToggleRow {
           visible: root.menuState === "on" || root.menuState === "off"
           title: "Show in the Omarchy menu"
-          description: "Adds Lock Screen under Style in the Omarchy menu, so you can open these settings without a terminal."
+          description: "Adds Lock Screen under " + root.menuSection + " in the Omarchy menu, so you can open these settings without a terminal."
           checked: root.menuState === "on"
           onToggled: root.setMenu(root.menuState !== "on")
         }
@@ -1688,7 +1701,7 @@ Item {
           topPadding: 6
           wrapMode: Text.WordWrap
           text: root.menuState === "other"
-            ? "Your Omarchy menu already has its own Style → Lock Screen entry, so Hello Lock leaves it alone. Open these settings with  omarchy-shell lock settings ."
+            ? "Your Omarchy menu already has its own " + root.menuSection + " → Lock Screen entry, so Hello Lock leaves it alone. Open these settings with  omarchy-shell lock settings ."
             : "Hello Lock couldn't read your Omarchy menu file, so it isn't changed. Open these settings with  omarchy-shell lock settings ."
           color: Theme.muted
           font.pixelSize: 12

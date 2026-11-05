@@ -446,3 +446,53 @@ for (const brokenSplash of [false, true]) {
   assert.equal(c.tryUnlockTimer.restarted, true);
 }
 console.log('Instant unlock and explicit configuration reload regressions passed.');
+{
+  // Omarchy 4.5 video wallpapers: the lock draws the poster from 4.5's own
+  // lock/poster.sh, and passes the path through where that script is missing.
+  const c = context();
+  c.posterProc = {running: false, sourcePath: ''};
+  const still = '/home/u/Wallpapers/still.png';
+  const video = '/home/u/Wallpapers/clip.MP4';
+  assert.equal(c.isVideoPath(still), false);
+  assert.equal(c.isVideoPath(video), true);
+  assert.equal(c.lockWallpaperFor(still, '', ''), still, 'a still wallpaper is drawn as before');
+  assert.equal(c.lockWallpaperFor(still, '/cache/p.jpg', 'yes'), still);
+  assert.equal(c.lockWallpaperFor(video, '', ''), '', 'no video path is drawn while support is unknown');
+  assert.equal(c.lockWallpaperFor(video, '/cache/p.jpg', 'yes'), '/cache/p.jpg');
+  assert.equal(c.lockWallpaperFor(video, '', 'yes'), '', 'a failed poster leaves the plain background');
+  assert.equal(c.lockWallpaperFor(video, '', 'no'), video, 'Omarchy 4.0 keeps the 0.6.0 behaviour');
+
+  c.backgroundPath = still; c.videoBackground = false; c.videoPosterPath = '/cache/old.jpg';
+  c.refreshPoster();
+  assert.equal(c.posterProc.running, false, 'still wallpapers never run the poster script');
+  assert.equal(c.videoPosterPath, '');
+
+  c.backgroundPath = video; c.videoBackground = true;
+  c.refreshPoster();
+  assert.equal(c.posterProc.running, true);
+  assert.equal(c.posterProc.sourcePath, video);
+  c.posterProc.running = false;
+  c.posterFinished(video, 0, '/cache/omarchy/lock-poster/poster-1.jpg\n');
+  assert.equal(c.posterSupport, 'yes');
+  assert.equal(c.videoPosterPath, '/cache/omarchy/lock-poster/poster-1.jpg');
+  c.posterFinished(video, 1, '');
+  assert.equal(c.videoPosterPath, '', 'a failing script leaves no poster');
+  c.posterFinished(video, 0, 'relative.jpg\n');
+  assert.equal(c.videoPosterPath, '', 'only an absolute image path is accepted');
+  c.posterFinished(video, 0, 'unsupported\n');
+  assert.equal(c.posterSupport, 'no');
+  assert.equal(c.videoPosterPath, '');
+
+  c.backgroundPath = '/home/u/Wallpapers/other.webm';
+  c.posterFinished(video, 0, '/cache/stale.jpg');
+  assert.equal(c.videoPosterPath, '', 'a result for a previous wallpaper is dropped');
+  assert.equal(c.posterProc.sourcePath, '/home/u/Wallpapers/other.webm', 'and the new one is requested');
+
+  assert.match(source, /command: \["bash", "-c", "\[\[ -f \$1 \]\] \|\| \{ echo unsupported; exit 0; \}; exec bash \\"\$1\\" \\"\$2\\"", "hello-lock-poster",\n      root\.posterScript, sourcePath\]/,
+    'the wallpaper path reaches the script only as an argument');
+  for (const binding of ['backgroundPath: root.wallpaperPath', 'value: root.wallpaperPath', 'item.backgroundPath = root.wallpaperPath'])
+    assert.ok(source.includes(binding), binding);
+  assert.ok(!/backgroundPath: root\.backgroundPath|item\.backgroundPath = root\.backgroundPath|value: root\.backgroundPath/.test(source),
+    'every wallpaper consumer draws the resolved path');
+}
+console.log('Video wallpaper poster regressions passed (no QML instantiated).');

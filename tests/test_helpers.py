@@ -13,6 +13,22 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(os.environ.get("HELLO_LOCK_TEST_ROOT", Path(__file__).resolve().parents[1]))
 
+# Omarchy's own menu: 4.0 has a "style" section, 4.5 renamed it "appearance".
+BASE_MENUS = {
+    "4.0": '{\n  // base\n  "style": {"icon":"x","label":"Style"},\n  "style.theme": {"label":"Theme"}\n}\n',
+    "4.5": '{\n  "appearance": {"icon":"x","label":"Appearance","aliases":["style"]},\n'
+           '  "appearance.theme": {"label":"Theme"}\n}\n',
+}
+
+
+def omarchy_tree(home, version):
+    """A disposable $OMARCHY_PATH holding only the base menu of that version."""
+    root = Path(home) / ("omarchy-" + version)
+    base = root / "default/omarchy/omarchy-menu.jsonc"
+    base.parent.mkdir(parents=True, exist_ok=True)
+    base.write_text(BASE_MENUS[version])
+    return root
+
 
 def load_helper(name):
     loader = importlib.machinery.SourceFileLoader(name, str(ROOT / "bin" / name))
@@ -361,16 +377,107 @@ class Menu(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        home = Path(self.temp.name)
-        self.env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"))
+        home = self.home = Path(self.temp.name)
+        self.env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
+                        OMARCHY_PATH=str(omarchy_tree(home, "4.0")))
         self.menu = home / "config/omarchy/extensions/omarchy-menu.jsonc"
 
-    def run_menu(self, action):
-        return subprocess.run([str(ROOT / "bin" / "hello-menu"), action], env=self.env,
+    def run_menu(self, action, omarchy=None):
+        env = self.env if omarchy is None else dict(self.env, OMARCHY_PATH=str(omarchy))
+        return subprocess.run([str(ROOT / "bin" / "hello-menu"), action], env=env,
                               capture_output=True, text=True, timeout=5)
 
     def parsed(self):
         return load_helper("hello-menu").parse(self.menu.read_text())
+
+    def backups(self):
+        return sorted(self.menu.parent.glob("omarchy-menu.jsonc.bak.hello-lock.*"))
+
+    def test_section_follows_the_installed_omarchy(self):
+        v45 = omarchy_tree(self.home, "4.5")
+        self.assertEqual(self.run_menu("section").stdout.strip(), "Style")
+        self.assertEqual(self.run_menu("section", v45).stdout.strip(), "Appearance")
+        self.assertEqual(self.run_menu("section", self.home / "missing").stdout.strip(), "Style")
+        self.assertEqual(self.run_menu("add", v45).stdout.strip(), "on")
+        self.assertEqual(set(self.parsed()), {"appearance.lockscreen"})
+        self.assertEqual(self.run_menu("remove", v45).stdout.strip(), "off")
+        self.assertEqual(self.parsed(), {})
+
+    def test_moves_its_own_entry_to_appearance_on_omarchy_4_5(self):
+        v45 = omarchy_tree(self.home, "4.5")
+        self.menu.parent.mkdir(parents=True)
+        # As written by 0.6.0, then reformatted by hand.
+        original = ('{\n  "update.omarchy": {"label": "U", "action": "u"},\n'
+                    '  "style.lockscreen": {\n    "label": "Lock Screen",\n'
+                    '    "action": "omarchy-shell lock settings"\n  },\n'
+                    '  "paper": {"label": "P", "action": "p"} // mine\n}\n')
+        self.menu.write_text(original)
+        self.assertEqual(self.run_menu("status", v45).stdout.strip(), "on")  # recognised before the move
+        self.assertEqual(self.run_menu("migrate").stdout.strip(), "on")  # 4.0: nothing to do
+        self.assertEqual(self.menu.read_text(), original)
+        self.assertEqual(self.backups(), [])
+        result = self.run_menu("migrate", v45)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "on"), result.stderr)
+        self.assertEqual(self.menu.read_text(), original.replace('"style.lockscreen"', '"appearance.lockscreen"'))
+        [backup] = self.backups()
+        self.assertEqual(backup.read_text(), original)
+        self.assertEqual(self.run_menu("migrate", v45).stdout.strip(), "on")  # idempotent
+        self.assertEqual(len(self.backups()), 1)
+        # add on 4.5 moves an old entry too, and back again on 4.0.
+        self.assertEqual(self.run_menu("add").stdout.strip(), "on")
+        self.assertEqual(self.menu.read_text(), original)
+
+    def test_migrate_never_guesses_or_displaces(self):
+        v45 = omarchy_tree(self.home, "4.5")
+        self.menu.parent.mkdir(parents=True)
+        cases = {
+            "unknown section": ('{ "style.lockscreen": {"action": "omarchy-shell lock settings"} }\n',
+                                self.home / "missing", "on"),
+            "someone else's": ('{ "style.lockscreen": {"label": "Mine", "action": "hyprlock"} }\n', v45, "off"),
+            "slot taken": ('{ "style.lockscreen": {"action": "omarchy-shell lock settings"},\n'
+                           '  "appearance.lockscreen": {"label": "Mine", "action": "hyprlock"} }\n', v45, "other"),
+            "both ours": ('{ "style.lockscreen": {"action": "omarchy-shell lock settings"},\n'
+                          '  "appearance.lockscreen": {"action": "omarchy-shell lock settings"} }\n', v45, "on"),
+            "unreadable": ('{ "style.lockscreen": ', v45, "unreadable"),
+        }
+        for name, (text, omarchy, expected) in cases.items():
+            with self.subTest(name):
+                self.menu.write_text(text)
+                self.assertEqual(self.run_menu("migrate", omarchy).stdout.strip(), expected)
+                self.assertEqual(self.menu.read_text(), text)
+        self.assertEqual(self.backups(), [])
+
+    def test_remove_takes_its_entry_from_either_section(self):
+        v45 = omarchy_tree(self.home, "4.5")
+        self.menu.parent.mkdir(parents=True)
+        self.menu.write_text('{\n  "a": {"action": "x"},\n'
+                             '  "style.lockscreen": {"action": "omarchy-shell lock settings"},\n'
+                             '  "appearance.lockscreen": {"action": "omarchy-shell lock settings"}\n}\n')
+        self.assertEqual(self.run_menu("remove", v45).stdout.strip(), "off")
+        self.assertEqual(self.parsed(), {"a": {"action": "x"}})
+        self.menu.write_text('{ "style.lockscreen": {"action": "omarchy-shell lock settings"},\n'
+                             '  "appearance.lockscreen": {"label": "Mine", "action": "hyprlock"} }\n')
+        result = self.run_menu("remove", v45)
+        self.assertEqual((result.returncode, result.stdout.strip()), (3, "other"))
+        self.assertEqual(self.parsed(), {"appearance.lockscreen": {"label": "Mine", "action": "hyprlock"}})
+
+    def test_doctor_reports_an_entry_under_either_section(self):
+        v45 = omarchy_tree(self.home, "4.5")
+        self.menu.parent.mkdir(parents=True)
+        self.menu.write_text('{ "style.lockscreen": {"action": "omarchy-shell lock settings"} }\n')
+        before = self.menu.read_text()
+
+        def doctor(omarchy):
+            env = dict(self.env, OMARCHY_PATH=str(omarchy), NO_COLOR="1",
+                       XDG_STATE_HOME=str(self.home / "state"), XDG_CACHE_HOME=str(self.home / "cache"))
+            return subprocess.run([str(ROOT / "bin" / "hello-lock-doctor")], env=env,
+                                  capture_output=True, text=True, timeout=60).stdout
+
+        self.assertIn("Style → Lock Screen opens Hello Lock's settings", doctor(self.env["OMARCHY_PATH"]))
+        self.assertIn("Hello Lock's menu entry is under style.lockscreen", doctor(v45))
+        self.assertEqual(self.menu.read_text(), before)  # the doctor stays read-only
+        self.run_menu("migrate", v45)
+        self.assertIn("Appearance → Lock Screen opens Hello Lock's settings", doctor(v45))
 
     def test_creates_the_file_and_removes_cleanly(self):
         self.assertEqual(self.run_menu("status").stdout.strip(), "off")
@@ -422,13 +529,16 @@ class MenuBackups(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
-        self.env = dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / "config"))
+        omarchy = omarchy_tree(self.home, "4.0")
+        self.env = dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / "config"),
+                        OMARCHY_PATH=str(omarchy))
         self.menu = self.home / "config/omarchy/extensions/omarchy-menu.jsonc"
         self.menu.parent.mkdir(parents=True)
         self.menu.write_text(self.ORIGINAL)
         self.menu.chmod(0o600)
         self.helper = load_helper("hello-menu")
         self.helper.MENU = str(self.menu)
+        self.helper.BASE_MENU = str(omarchy / "default/omarchy/omarchy-menu.jsonc")
 
     def run_menu(self, action, umask=0o022):
         return subprocess.run([str(ROOT / "bin" / "hello-menu"), action], env=self.env,
@@ -577,8 +687,14 @@ class MenuBackups(unittest.TestCase):
 
     def test_service_secures_backups_on_load(self):
         service = (ROOT / "Service.qml").read_text()
+        # migrate makes backups private first, like every hello-menu command.
         self.assertRegex(service, r'id: menuBackupsProc\n    running: true\n'
-                                  r'    command: \[root\.pluginDir \+ "/bin/hello-menu", "secure"\]')
+                                  r'    command: \[root\.pluginDir \+ "/bin/hello-menu", "migrate"\]')
+        legacy = self.legacy_backup()
+        result = self.run_menu("migrate")
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "off"), result.stderr)
+        self.assertEqual(self.mode(legacy), 0o600)
+        self.assertEqual(self.menu.read_text(), self.ORIGINAL)
 
     def test_doctor_reports_readable_backups(self):
         legacy = self.legacy_backup()

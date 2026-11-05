@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.1 — 2026-11-05
+
+Omarchy 4.5 compatibility; still works on Omarchy 4.0.6. No change to the
+password, fingerprint or PAM code, or to the lock/unlock lifecycle.
+
+- Menu: Omarchy 4.5 renamed the menu's Style section to Appearance, which hid
+  Hello Lock's `style.lockscreen` entry. `bin/hello-menu` now reads the section
+  from the installed Omarchy's own menu (`$OMARCHY_PATH/default/omarchy/omarchy-menu.jsonc`)
+  and writes `appearance.lockscreen` or `style.lockscreen` to match (Style when
+  that file can't be read, as before). Its own entry under either key counts as
+  on. New `hello-menu migrate` renames only the key of Hello Lock's own entry,
+  with the usual private backup, when the installed section is known and nobody
+  else's entry holds it; the service runs it on load in place of `secure` (which
+  it still does first). `remove` takes Hello Lock's entry from either section.
+  New `hello-menu section` prints Appearance or Style; Settings and the setup
+  use it for their wording. After updating to Omarchy 4.5, expect one automatic
+  edit of `~/.config/omarchy/extensions/omarchy-menu.jsonc` when the shell
+  loads Hello Lock (backed up first).
+- `hello-lock-doctor` reports where the menu entry is and warns when Hello
+  Lock's own entry is under a section the installed Omarchy doesn't have.
+- Video wallpapers (new in Omarchy 4.5) couldn't be drawn as an image, so the
+  lock showed a flat colour. When Omarchy's `shell/plugins/lock/poster.sh`
+  exists, the lock, its preview, the unlock splash and the setup now show the
+  video's cached still frame from that script, as the stock 4.5 lock does
+  (the plain background colour shows until it is ready or if it fails).
+  Without the script (Omarchy 4.0) the wallpaper path is used as before.
+- README: Appearance → Lock Screen (Style on Omarchy 4.0); the fingerprint flow
+  is described as derived from Omarchy 4.0.6 rather than identical to the
+  current Omarchy's; supported Omarchy versions noted.
+
 ## 0.6.0 — 2026-11-03
 
 - Add explicit standalone idle/logind integration through swayidle, a suspend

@@ -95,7 +95,7 @@ omarchy plugin add https://github.com/denonmaryland/hello-lock.git --enable
 omarchy restart shell
 ```
 
-After the restart, a short setup opens and asks five things: your name, your birthday, your logo, your unlock symbol and how it reacts as you type. You don't need to bring anything; without a config it uses your account's name and the Omarchy logo. Afterwards, open the settings from the Omarchy menu under **Style → Lock Screen** (the setup offers to add it) or with `omarchy-shell lock settings`.
+After the restart, a short setup opens and asks five things: your name, your birthday, your logo, your unlock symbol and how it reacts as you type. You don't need to bring anything; without a config it uses your account's name and the Omarchy logo. Afterwards, open the settings from the Omarchy menu under **Appearance → Lock Screen** (**Style → Lock Screen** on Omarchy 4.0; the setup offers to add it) or with `omarchy-shell lock settings`.
 
 Hello Lock replaces Omarchy's built-in lock screen; enabling it switches the stock one off. Your password checking is the same PAM code Omarchy uses. Lock services only load on a shell restart, hence the second command.
 
@@ -120,7 +120,7 @@ omarchy plugin remove hello-lock
 omarchy restart shell
 ```
 
-Omarchy's stock lock screen comes back. If you skip the first line, the **Style → Lock Screen** entry simply stops showing once Hello Lock is gone; you can delete its line from `~/.config/omarchy/extensions/omarchy-menu.jsonc` whenever you like.
+Omarchy's stock lock screen comes back. If you skip the first line, the **Appearance → Lock Screen** (Style on Omarchy 4.0) entry simply stops showing once Hello Lock is gone; you can delete its line from `~/.config/omarchy/extensions/omarchy-menu.jsonc` whenever you like.
 
 </details>
 
@@ -155,7 +155,7 @@ The first time the shell starts with Hello Lock, a short setup screen opens. It 
 
 <p align="center"><img src="docs/onboarding.gif" alt="The setup screen: typing a wordmark, trying styles, picking an unlock symbol" width="620"></p>
 
-The last step also offers to add **Lock Screen** to the Omarchy menu, under **Style**, so you can come back to the settings without a terminal (it's ticked; untick it to leave your menu alone). Then **Save and try it** plays your unlock animation. Enter goes forward and Esc goes back. On the logo step, ↑/↓ switch options and Tab / Shift+Tab change the wordmark style. On the symbol step, ←/→ move along a row, ↑/↓ change rows, and the symbol's name shows below the grid. On the typing step, ←/→ or Tab pick the effect. Run the setup again any time, or use [Settings](#settings) to change one thing:
+The last step also offers to add **Lock Screen** to the Omarchy menu, under **Appearance** (**Style** on Omarchy 4.0), so you can come back to the settings without a terminal (it's ticked; untick it to leave your menu alone). Then **Save and try it** plays your unlock animation. Enter goes forward and Esc goes back. On the logo step, ↑/↓ switch options and Tab / Shift+Tab change the wordmark style. On the symbol step, ←/→ move along a row, ↑/↓ change rows, and the symbol's name shows below the grid. On the typing step, ←/→ or Tab pick the effect. Run the setup again any time, or use [Settings](#settings) to change one thing:
 
 ```bash
 omarchy-shell lock onboarding
@@ -169,7 +169,7 @@ refuses to replace malformed or unreadable settings.
 
 ## Settings
 
-Change anything later in one window, with no steps to click through. Open it from the Omarchy menu (**Super + Alt + Space**) under **Style → Lock Screen**, or from a terminal:
+Change anything later in one window, with no steps to click through. Open it from the Omarchy menu (**Super + Alt + Space**) under **Appearance → Lock Screen** (Style on Omarchy 4.0), or from a terminal:
 
 ```bash
 omarchy-shell lock settings
@@ -185,7 +185,9 @@ An icon rail on the left holds eight sections: **You** (name, birthday, the stat
 
 A symbol you set by hand in `config.json` (a file path or `symbolParts`) shows as **Custom**. If you try a built-in symbol, you can switch back to Custom until you close the window.
 
-**Style → Lock Screen** is added by the setup if you leave its box ticked, and **Settings → Lock screen → Show in the Omarchy menu** turns it on or off any time. It is one line in your own `~/.config/omarchy/extensions/omarchy-menu.jsonc`: Hello Lock keeps everything else in that file, saves a private (owner-only) backup before each change, and leaves the file alone if it can't read it or if you already have your own **Style → Lock Screen** entry. The line hides itself when Hello Lock isn't installed. From a terminal: `bin/hello-menu status`, `add` or `remove` in the plugin folder; `bin/hello-menu secure` only makes existing backups private.
+**Appearance → Lock Screen** (Style on Omarchy 4.0) is added by the setup if you leave its box ticked, and **Settings → Lock screen → Show in the Omarchy menu** turns it on or off any time. It is one line in your own `~/.config/omarchy/extensions/omarchy-menu.jsonc`: Hello Lock keeps everything else in that file, saves a private (owner-only) backup before each change, and leaves the file alone if it can't read it or if you already have your own Lock Screen entry in that section. The line hides itself when Hello Lock isn't installed.
+
+Omarchy 4.5 renamed the menu's Style section to Appearance. Hello Lock reads the section name from the installed Omarchy's own menu (`$OMARCHY_PATH/default/omarchy/omarchy-menu.jsonc`) and writes `appearance.lockscreen` or `style.lockscreen` to match. An entry Hello Lock added before you updated still counts as on: when the service loads it renames only that entry's key (with a backup, and only when the installed section is known and free), so it shows up under Appearance again. From a terminal: `bin/hello-menu status`, `add`, `remove` or `migrate` in the plugin folder; `bin/hello-menu section` prints the section name; `bin/hello-menu secure` only makes existing backups private.
 
 ## Brand presets
 
@@ -297,7 +299,7 @@ generation and a listening-preview command are in [sounds/README.md](sounds/READ
 ~/.config/omarchy/plugins/hello-lock/bin/hello-lock-doctor
 ```
 
-It checks that Hello Lock is installed, enabled and loaded, that the stock lock is off, that the PAM file is there, that `grim`, `pw-play` and the bundled fonts and sounds are present, and that your `config.json` is valid: unknown keys, wrong types, the birthday format, and whether your logo and symbol files exist. It also shows your sound settings and any leftover snapshots. Every problem comes with how to fix it.
+It checks that Hello Lock is installed, enabled and loaded, that the stock lock is off, that the PAM file is there, that `grim`, `pw-play` and the bundled fonts and sounds are present, and that your `config.json` is valid: unknown keys, wrong types, the birthday format, and whether your logo and symbol files exist. It also shows your sound settings, any leftover snapshots and whether its Omarchy menu entry is in the section your Omarchy uses (Appearance on 4.5, Style on 4.0). Every problem comes with how to fix it.
 
 It only reads; it changes nothing. It doesn't go online unless you add `--online`, which tests reaching wttr.in. `--json` prints machine-readable output, and `--config PATH` checks another config file. It exits 0 when all is good, 1 on warnings and 2 on problems. `bin/hello-config doctor` runs the same thing.
 
@@ -309,7 +311,7 @@ It only reads; it changes nothing. It doesn't go online unless you add `--online
 
 A lock screen has one job, so here is exactly what Hello Lock changes and what it doesn't.
 
-**In the Omarchy plugin, password checking uses Omarchy's code.** Hello Lock started as a copy of Omarchy's lock service (`/usr/share/omarchy/shell/plugins/lock/Service.qml`). The two PAM contexts (`omarchy-lock-password` and `omarchy-lock-fingerprint`), the functions that send your password to PAM, the fingerprint flow, the check for `/etc/pam.d/omarchy-lock-password` and the `lock` command are identical, line for line. The only change in the password path is a sound after a failed attempt. Hello Lock's lock view is redrawn, but it only collects what you type and hands it to that same unchanged code. The Omarchy plugin adds no PAM files or authentication bypass. Experimental standalone locking uses a separate, explicitly installed PAM policy; see [its scope and setup](docs/standalone.md).
+**In the Omarchy plugin, password checking uses Omarchy's code.** Hello Lock started as a copy of Omarchy's lock service (`/usr/share/omarchy/shell/plugins/lock/Service.qml`). The two PAM contexts (`omarchy-lock-password` and `omarchy-lock-fingerprint`), the functions that send your password to PAM, the check for `/etc/pam.d/omarchy-lock-password` and the `lock` command match Omarchy's. The fingerprint flow is derived from Omarchy 4.0.6's; Omarchy 4.5 has since reworked its own fingerprint loop (retry backoff, pausing while the displays are off, recovery after resume), and those changes are not in Hello Lock yet. The only change in the password path is a sound after a failed attempt. Hello Lock's lock view is redrawn, but it only collects what you type and hands it to that same unchanged code. The Omarchy plugin adds no PAM files or authentication bypass. Experimental standalone locking uses a separate, explicitly installed PAM policy; see [its scope and setup](docs/standalone.md).
 
 **The animation starts only after your password is accepted.** The unlock runs only when PAM reports success, from the password or the fingerprint, just like the stock lock. With unlock animations enabled, Hello Lock then dims the lock screen and starts a fixed 0.36 s timer. When it fires, the session unlocks. The timer doesn't wait for the animation, and the calls into the animation during unlock are wrapped so an error in it can't stop the unlock. The animation itself plays on your desktop after the session is already unlocked. Any key or click skips it, and it removes itself after 8.5 s at most (or sooner with a custom time cap). With `unlockAnimation: false`, successful authentication releases the lock directly and no splash is shown.
 
@@ -389,6 +391,7 @@ There's no choice to make in setup; to pin one, pick it in Settings → Unlock �
 - What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 - Hello Lock is a copy of Omarchy's lock service with the visuals added on top. If Omarchy fixes something in its own lock screen, that fix won't reach Hello Lock until Hello Lock is updated.
 - The multi-monitor timing (power-down ripple, quieter unlock on other screens) is built for several monitors but so far has only been tested on a single laptop screen.
+- Works with Omarchy 4.0.x and 4.5. On 4.5 the menu entry lives under Appearance, and a video wallpaper shows on the lock screen as its still frame, made by Omarchy 4.5's own lock poster script (`shell/plugins/lock/poster.sh`, cached in `~/.cache/omarchy/lock-poster`), exactly as the stock 4.5 lock does; nothing plays behind the lock. Without that script (Omarchy 4.0) the wallpaper is handled as before.
 - Requires Omarchy's Quickshell-based shell. It uses `grim` (power-down effect), `pw-play` or `paplay` (lock/unlock sounds) and `python3` (status line), which ship with Omarchy. Optional typing sounds use the `QtMultimedia` QML module (`qt6-multimedia` on Arch); they stay silent when it is unavailable.
 
 </details>

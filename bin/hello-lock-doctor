@@ -836,6 +836,62 @@ def check_leftovers(shell_state):
             "omarchy-shell lock onboarding")
 
 
+def menu_helper():
+    """bin/hello-menu as a module, for its parser and section rules only."""
+    import importlib.machinery
+    import importlib.util
+    sys.dont_write_bytecode = True  # read-only: no __pycache__ in the plugin folder
+    path = os.path.join(OWN_DIR, "bin", "hello-menu")
+    loader = importlib.machinery.SourceFileLoader("hello_menu", path)
+    spec = importlib.util.spec_from_loader("hello_menu", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def check_menu():
+    """Report Hello Lock's Omarchy menu entry under either section's key:
+    Appearance on Omarchy 4.5, Style on 4.0. Reads only; never edits."""
+    S = "Omarchy menu"
+    try:
+        hm = menu_helper()
+    except Exception as e:  # a broken helper is reported, never fatal
+        add(S, WARN, "Couldn't load bin/hello-menu", str(e))
+        return
+    fix = os.path.join(OWN_DIR, "bin", "hello-menu")
+    section = hm.detected_section()
+    label = hm.section_label(section)
+    key = hm.menu_key(section)
+    if section is None:
+        add(S, INFO, "Couldn't tell the menu section from Omarchy's own menu",
+            "%s has no Appearance or Style section or can't be read; Hello Lock assumes %s."
+            % (tilde(hm.BASE_MENU), label))
+    try:
+        with open(hm.MENU, encoding="utf-8") as f:
+            data = hm.parse(f.read())
+    except FileNotFoundError:
+        data = {}
+    except (OSError, UnicodeDecodeError, hm.Unsafe) as e:
+        add(S, WARN, "Can't read %s" % tilde(hm.MENU), str(e) + ". Hello Lock leaves it unchanged.")
+        return
+    stale = hm.stale_keys(data, key)
+    if hm.ours(data.get(key)):
+        add(S, OK, "%s → Lock Screen opens Hello Lock's settings" % label)
+    elif data.get(key) is not None:
+        add(S, INFO, "Your menu has its own %s → Lock Screen entry (%s)" % (label, key),
+            "Hello Lock leaves it alone." + (" Hello Lock's own entry is still under %s." % ", ".join(stale)
+                                              if stale else ""))
+    elif stale and section is not None:
+        add(S, WARN, "Hello Lock's menu entry is under %s, which this Omarchy doesn't have" % ", ".join(stale),
+            "It won't show in the menu until it becomes %s. The service renames it when it loads." % key,
+            fix + " migrate")
+    elif stale:
+        add(S, OK, "Lock Screen opens Hello Lock's settings (%s)" % ", ".join(stale))
+    else:
+        add(S, INFO, "No Lock Screen entry in the Omarchy menu",
+            "Settings → Lock screen → Show in the Omarchy menu adds it under %s." % label, fix + " add")
+
+
 # ------------------------------------------------------------ network (opt-in)
 def check_online(cfg):
     S = "Network"
@@ -929,6 +985,7 @@ def main(argv):
     checks.extend(config_checks)
     check_sound(cfg, config_dir)
     check_leftovers(shell_state)
+    check_menu()
     if online:
         check_online(cfg)
 

@@ -1,9 +1,13 @@
 #!/usr/bin/env -S python3 -I
-"""Add or remove Hello Lock's entry in the Omarchy menu (Style > Lock Screen).
+"""Add or remove Hello Lock's entry in the Omarchy menu (Appearance > Lock Screen,
+or Style > Lock Screen on Omarchy 4.0).
 
 Usage: hello-menu status   print on, off, other or unreadable
        hello-menu add      add the entry (prints on)
        hello-menu remove   remove Hello Lock's entry (prints off)
+       hello-menu migrate  move Hello Lock's own entry to the section the
+                           installed Omarchy uses (prints the new status)
+       hello-menu section  print the section's label: Appearance or Style
        hello-menu secure   only make existing backups private (prints done)
 
 The entry lives in the user's ~/.config/omarchy/extensions/omarchy-menu.jsonc,
@@ -18,9 +22,16 @@ follows a symlink, and only regular files you own count as old backups. Every
 command, even status, first makes those private (older versions could leave them
 readable); edits also delete all but the newest few.
 
-"other" means the menu already has a Style > Lock Screen entry that doesn't open
-Hello Lock's settings; it is never changed. The entry hides itself if Hello Lock
-is removed, so a leftover line is harmless.
+Omarchy 4.5 renamed the Style section to Appearance. The section is read from
+the installed Omarchy's own menu ($OMARCHY_PATH/default/omarchy/omarchy-menu.jsonc):
+"appearance.lockscreen" when it has an Appearance section, "style.lockscreen"
+otherwise (Omarchy 4.0, or when that file can't be read). An entry of Hello
+Lock's own under the other key counts as on; add and migrate rename its key in
+place (nothing else on the line changes) once the installed section is known.
+
+"other" means the menu already has a Lock Screen entry in that section that
+doesn't open Hello Lock's settings; it is never changed. The entry hides itself
+if Hello Lock is removed, so a leftover line is harmless.
 
 Exit codes: 0 done, 3 another entry is in the way, 4 the menu file can't be
 read or edited safely.
@@ -35,7 +46,13 @@ import tempfile
 
 MENU = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
                     "omarchy", "extensions", "omarchy-menu.jsonc")
-KEY = "style.lockscreen"
+OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
+BASE_MENU = os.path.join(OMARCHY_PATH, "default", "omarchy", "omarchy-menu.jsonc")
+# The look-and-feel section of Omarchy's own menu, newest name first:
+# Omarchy 4.5 calls it Appearance, 4.0 called it Style.
+SECTIONS = (("appearance", "Appearance"), ("style", "Style"))
+FALLBACK_SECTION = "style"
+KEYS = tuple(name + ".lockscreen" for name, _ in SECTIONS)
 ACTION = "omarchy-shell lock settings"
 ENTRY = {
     "icon": "",
@@ -124,13 +141,47 @@ def parse(text):
     return data
 
 
-def state(data):
-    entry = data.get(KEY)
-    if entry is None:
-        return "off"
-    if isinstance(entry, dict) and ACTION in str(entry.get("action", "")):
-        return "on"
-    return "other"
+def detected_section():
+    """The installed Omarchy's look section ("appearance" or "style"), or None
+    if its menu can't be read or has neither."""
+    try:
+        with open(BASE_MENU, encoding="utf-8") as f:
+            base = parse(f.read())
+    except (OSError, UnicodeDecodeError, Unsafe):
+        return None
+    for name, _ in SECTIONS:
+        if name in base:
+            return name
+    return None
+
+
+def menu_key(section=None):
+    return (section or detected_section() or FALLBACK_SECTION) + ".lockscreen"
+
+
+def section_label(section=None):
+    return dict(SECTIONS)[section or detected_section() or FALLBACK_SECTION]
+
+
+def ours(entry):
+    return isinstance(entry, dict) and ACTION in str(entry.get("action", ""))
+
+
+def stale_keys(data, key):
+    """Known Lock Screen keys other than key that hold Hello Lock's own entry."""
+    return [k for k in KEYS if k != key and ours(data.get(k))]
+
+
+def state(data, key=None):
+    """on, off or other for the Lock Screen entry under key (the installed
+    section's by default). Hello Lock's own entry under the other section's key
+    also counts as on, so a menu written before an Omarchy update still reads
+    as on until it is migrated."""
+    key = key or menu_key()
+    entry = data.get(key)
+    if entry is not None:
+        return "on" if ours(entry) else "other"
+    return "on" if stale_keys(data, key) else "off"
 
 
 def read():
@@ -193,8 +244,8 @@ def tidy_backups():
 
 
 def write(old, new, check):
-    data = parse(new)
-    if state(data) != check:
+    """Replace the menu with new, after check(parsed new) says it came out right."""
+    if not check(parse(new)):
         raise Unsafe("the edit didn't come out as expected")
     try:
         os.makedirs(os.path.dirname(MENU), exist_ok=True)
@@ -215,16 +266,64 @@ def write(old, new, check):
         raise Unsafe(str(e))
 
 
-def entry_line():
-    return "  " + COMMENT + "\n  " + json.dumps(KEY) + ": " + json.dumps(ENTRY, ensure_ascii=False, separators=(",", ":")) + ",\n"
+def entry_line(key):
+    return "  " + COMMENT + "\n  " + json.dumps(key) + ": " + json.dumps(ENTRY, ensure_ascii=False, separators=(",", ":")) + ",\n"
+
+
+def key_token(text, key):
+    """(index into the non-comment tokens, token) of key as a top-level name."""
+    tokens = [t for t in scan(text) if t[0] != "comment"]
+    for k, (kind, a, b, depth) in enumerate(tokens):
+        if kind == "str" and depth == 1 and json.loads(text[a:b]) == key \
+                and k + 1 < len(tokens) and text[tokens[k + 1][1]] == ":":
+            return tokens, k
+    raise Unsafe("couldn't find the entry %s" % key)
+
+
+def is_on(key):
+    return lambda data: ours(data.get(key)) and not stale_keys(data, key)
+
+
+def rename(text, data, old_key, key):
+    """Move Hello Lock's own entry from old_key to key by renaming only the key
+    string; its value, comment and formatting stay exactly as they were."""
+    tokens, k = key_token(text, old_key)
+    a, b = tokens[k][1], tokens[k][2]
+    new = text[:a] + json.dumps(key) + text[b:]
+    expected = {(key if name == old_key else name): value for name, value in data.items()}
+    write(text, new, lambda d: d == expected and is_on(key)(d))
+    return "on"
+
+
+def migrate():
+    """Rename Hello Lock's own entry to the installed section's key. Only when
+    that section is known from Omarchy's own menu, and only if nothing else
+    already uses the key."""
+    section = detected_section()
+    text = read()
+    if text is None:
+        return "off"
+    data = parse(text)
+    if section is None:
+        return state(data)
+    key = menu_key(section)
+    stale = stale_keys(data, key)
+    if data.get(key) is None and len(stale) == 1:
+        return rename(text, data, stale[0], key)
+    return state(data, key)
 
 
 def add():
+    section = detected_section()
+    key = menu_key(section)
     text = read()
     if text is None:
-        write(None, "{\n" + entry_line() + "}\n", "on")
+        write(None, "{\n" + entry_line(key) + "}\n", is_on(key))
         return "on"
-    current = state(parse(text))
+    data = parse(text)
+    current = state(data, key)
+    if current == "on" and data.get(key) is None and section is not None:
+        return migrate()  # only an entry under the old section's name: move it
     if current != "off":
         return current
     tokens = [t for t in scan(text) if t[0] != "comment"]
@@ -243,47 +342,58 @@ def add():
     if text[last[1]] not in "{,":
         # The last entry has no trailing comma: add one right after its value.
         head = head[:last[2]] + "," + head[last[2]:]
-    write(text, head + entry_line() + tail, "on")
+    write(text, head + entry_line(key) + tail, is_on(key))
     return "on"
 
 
+def cut(text, key):
+    """text without the top-level entry key (and its own comment line above)."""
+    tokens, k = key_token(text, key)
+    a = tokens[k][1]
+    # The value runs to the matching close; then an optional comma.
+    j = k + 2
+    while j < len(tokens) and not (tokens[j][3] == 1 and text[tokens[j][1]] in "}]"):
+        j += 1
+    if j >= len(tokens):
+        raise Unsafe("couldn't find the end of the entry %s" % key)
+    end = tokens[j][2]
+    if j + 1 < len(tokens) and text[tokens[j + 1][1]] == ",":
+        end = tokens[j + 1][2]
+    start = a
+    line_start = text.rfind("\n", 0, start) + 1
+    if text[line_start:start].strip() == "":
+        start = line_start
+        line_end = text.find("\n", end)
+        if line_end >= 0 and text[end:line_end].strip() == "":
+            end = line_end + 1
+        # Our own comment line directly above goes too.
+        prev_start = text.rfind("\n", 0, max(0, start - 1)) + 1
+        if text[prev_start:start].strip() == COMMENT:
+            start = prev_start
+    return text[:start] + text[end:]
+
+
 def remove():
+    """Remove Hello Lock's own entry under either section's key; anyone else's
+    Lock Screen entry stays."""
     text = read()
     if text is None:
         return "off"
-    current = state(parse(text))
-    if current != "on":
-        return current
-    tokens = [t for t in scan(text) if t[0] != "comment"]
-    for k, (kind, a, b, depth) in enumerate(tokens):
-        if kind == "str" and depth == 1 and json.loads(text[a:b]) == KEY \
-                and k + 1 < len(tokens) and text[tokens[k + 1][1]] == ":":
-            # The value runs to the matching close; then an optional comma.
-            j = k + 2
-            while j < len(tokens) and not (tokens[j][3] == 1 and text[tokens[j][1]] in "}]"):
-                j += 1
-            end = tokens[j][2]
-            if j + 1 < len(tokens) and text[tokens[j + 1][1]] == ",":
-                end = tokens[j + 1][2]
-            start = a
-            line_start = text.rfind("\n", 0, start) + 1
-            if text[line_start:start].strip() == "":
-                start = line_start
-                line_end = text.find("\n", end)
-                if line_end >= 0 and text[end:line_end].strip() == "":
-                    end = line_end + 1
-                # Our own comment line directly above goes too.
-                prev_start = text.rfind("\n", 0, max(0, start - 1)) + 1
-                if text[prev_start:start].strip() == COMMENT:
-                    start = prev_start
-            new = text[:start] + text[end:]
-            write(text, new, "off")
-            return "off"
-    raise Unsafe("couldn't find the entry to remove")
+    data = parse(text)
+    mine = [k for k in KEYS if ours(data.get(k))]
+    if not mine:
+        return state(data)
+    new = text
+    for k in mine:
+        new = cut(new, k)
+    expected = {name: value for name, value in data.items() if name not in mine}
+    write(text, new, lambda d: d == expected)
+    return state(expected)
 
 
 def main(argv):
-    if len(argv) != 2 or argv[1] not in ("status", "add", "remove", "secure"):
+    commands = ("status", "add", "remove", "migrate", "section", "secure")
+    if len(argv) != 2 or argv[1] not in commands:
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
     try:
@@ -292,9 +402,12 @@ def main(argv):
         print("hello-menu: couldn't make the menu backups private (%s)" % e, file=sys.stderr)
         if argv[1] == "secure":
             return 4
-        # Still answer status/add/remove; edits retry this and fail if it still fails.
+        # Still answer the others; edits retry this and fail if it still fails.
     if argv[1] == "secure":
         print("done")
+        return 0
+    if argv[1] == "section":
+        print(section_label())
         return 0
     try:
         if argv[1] == "status":
@@ -302,6 +415,8 @@ def main(argv):
             result = "off" if text is None else state(parse(text))
         elif argv[1] == "add":
             result = add()
+        elif argv[1] == "migrate":
+            result = migrate()
         else:
             result = remove()
     except Unsafe as e:
@@ -309,9 +424,9 @@ def main(argv):
         print("hello-menu: %s is left unchanged (%s)" % (MENU, e), file=sys.stderr)
         return 4
     print(result)
-    if result == "other" and argv[1] != "status":
-        print("hello-menu: the Omarchy menu already has its own Style > Lock Screen entry; it is left unchanged",
-              file=sys.stderr)
+    if result == "other" and argv[1] in ("add", "remove"):
+        print("hello-menu: the Omarchy menu already has its own %s > Lock Screen entry; it is left unchanged"
+              % section_label(), file=sys.stderr)
         return 3
     return 0
 

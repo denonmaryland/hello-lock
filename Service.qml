@@ -36,6 +36,17 @@ Item {
   property int failedAttempts: 0
   property string backgroundPath: ""
   property int backgroundVersion: 0
+  // Omarchy 4.5 video wallpapers can't be drawn as an image. Like 4.5's own
+  // lock, show the video's cached still frame from its lock/poster.sh instead.
+  // posterSupport: "" until known, "yes" while that script exists, "no" when
+  // it doesn't (Omarchy 4.0), where the path is passed through as before.
+  property string videoPosterPath: ""
+  property string posterSupport: ""
+  readonly property bool videoBackground: isVideoPath(backgroundPath)
+  readonly property string posterScript: (omarchyPath || Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy")
+    + "/shell/plugins/lock/poster.sh"
+  // What every lock surface, the splash and setup actually draw.
+  readonly property string wallpaperPath: lockWallpaperFor(backgroundPath, videoPosterPath, posterSupport)
   property string lastEvent: "init"
   property string lastEventAt: ""
   property bool strandedLock: false
@@ -456,6 +467,45 @@ Item {
     if (!readlinkProc.running) readlinkProc.running = true
   }
 
+  function isVideoPath(path) {
+    return /\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(String(path || ""))
+  }
+
+  // A still wallpaper as is; a video's poster (empty, so the plain background
+  // colour shows, until it is ready or if it can't be made); the video path
+  // itself only where no poster script exists, which is the 0.6.0 behaviour.
+  function lockWallpaperFor(path, poster, support) {
+    if (!isVideoPath(path)) return path
+    return support === "no" ? path : poster
+  }
+
+  function refreshPoster() {
+    if (!videoBackground) {
+      videoPosterPath = ""
+      return
+    }
+    if (posterProc.running) return
+    posterProc.sourcePath = backgroundPath
+    posterProc.running = true
+  }
+
+  // posterProc prints "unsupported" when the script isn't there; any failure
+  // of the script itself leaves no poster, as on 4.5's own lock.
+  function posterFinished(sourcePath, exitCode, output) {
+    if (sourcePath !== backgroundPath) {
+      refreshPoster()
+      return
+    }
+    var poster = exitCode === 0 ? String(output || "").trim() : ""
+    if (poster === "unsupported") {
+      posterSupport = "no"
+      videoPosterPath = ""
+      return
+    }
+    posterSupport = "yes"
+    videoPosterPath = poster.indexOf("/") === 0 && !isVideoPath(poster) ? poster : ""
+  }
+
   function refreshFingerprintStatus() {
     if (!fingerprintCheckProc.running) fingerprintCheckProc.running = true
   }
@@ -670,7 +720,7 @@ Item {
       LockView {
         id: lockView
         anchors.fill: parent
-        backgroundPath: root.backgroundPath
+        backgroundPath: root.wallpaperPath
         backgroundVersion: root.backgroundVersion
         fingerprintConfigured: root.fingerprintConfigured
         authenticatingPassword: root.authenticatingPassword
@@ -712,7 +762,7 @@ Item {
 
     LockView {
       anchors.fill: parent
-      backgroundPath: root.backgroundPath
+      backgroundPath: root.wallpaperPath
       backgroundVersion: root.backgroundVersion
       fingerprintConfigured: root.fingerprintConfigured
       authenticatingPassword: root.previewAuthenticating
@@ -789,7 +839,7 @@ Item {
   Binding {
     target: unlockSplashLoader.item
     property: "backgroundPath"
-    value: root.backgroundPath
+    value: root.wallpaperPath
     when: unlockSplashLoader.status === Loader.Ready
   }
 
@@ -968,11 +1018,24 @@ Item {
       onStreamFinished: {
         var next = String(text || "").trim()
         if (next !== root.backgroundPath) {
+          root.videoPosterPath = ""
           root.backgroundPath = next
           root.backgroundVersion += 1
         }
+        root.refreshPoster()
       }
     }
+  }
+
+  // Omarchy 4.5's own poster script (cached per file and mtime under
+  // ~/.cache/omarchy/lock-poster); the path is an argument, never shell text.
+  Process {
+    id: posterProc
+    property string sourcePath: ""
+    command: ["bash", "-c", "[[ -f $1 ]] || { echo unsupported; exit 0; }; exec bash \"$1\" \"$2\"", "hello-lock-poster",
+      root.posterScript, sourcePath]
+    stdout: StdioCollector { id: posterOutput; waitForEnd: true }
+    onExited: function(exitCode) { root.posterFinished(posterProc.sourcePath, exitCode, posterOutput.text) }
   }
 
   Process {
@@ -1124,7 +1187,7 @@ Item {
       item.suggestedName = root.accountName
         || (root.userName ? root.userName.charAt(0).toUpperCase() + root.userName.slice(1) : "")
       item.currentConfig = root.userConfig
-      item.backgroundPath = root.backgroundPath
+      item.backgroundPath = root.wallpaperPath
       item.backgroundVersion = root.backgroundVersion
       item.reducedMotion = root.reducedMotion
       item.start()
@@ -1146,11 +1209,14 @@ Item {
   }
 
   // Once per load: make menu backups left readable by 0.5.0 and older private,
-  // even if Settings is never opened. Never touches the menu itself.
+  // even if Settings is never opened. The only menu change it can make is
+  // renaming Hello Lock's own entry to the section the installed Omarchy uses
+  // (style.lockscreen -> appearance.lockscreen after updating to 4.5), with a
+  // backup; any other entry and an unreadable menu are left alone.
   Process {
     id: menuBackupsProc
     running: true
-    command: [root.pluginDir + "/bin/hello-menu", "secure"]
+    command: [root.pluginDir + "/bin/hello-menu", "migrate"]
   }
 
   // After saving, wait for config.json to reload, then play the unlock as a demo.
