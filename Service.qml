@@ -286,6 +286,8 @@ Item {
   property bool snapshotReady: false
   property int snapshotVersion: 0
   property int powerDownToken: 0
+  // A capture normally lands well under a second after the lock starts.
+  readonly property int powerDownMaxDelayMs: 2500
   // Preview-only counter for simulating a wrong password on the preview window.
   property int previewFailures: 0
   // Preview-only typing simulation (IPC previewType/previewSubmit): a dummy
@@ -857,6 +859,16 @@ Item {
       if (exitCode !== 0) { root.logEvent("hello-lock snapshot failed: " + exitCode); return }
       var capture
       try { capture = JSON.parse(snapshotOutput.text) } catch (e) { return }
+      // Locking for suspend: no power-down, so waking shows the lock screen
+      // rather than a replay of the old desktop.
+      if (capture.skipped) { root.logEvent("power-down skipped: " + capture.skipped); return }
+      // A capture that outlived a suspend (lock, then lid closed at once) is
+      // stale for the same reason. Date.now() counts the time asleep.
+      if (Date.now() - root.lockStartedAt > root.powerDownMaxDelayMs) {
+        root.logEvent("power-down skipped: capture finished after a suspend")
+        root.queueSnapshotCleanup(capture.directory)
+        return
+      }
       if (epoch !== root.snapshotEpoch || !root.lockRequested) {
         root.queueSnapshotCleanup(capture.directory)
         return

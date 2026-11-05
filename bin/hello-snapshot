@@ -76,9 +76,28 @@ def capture(outputs, runtime):
         raise
 
 
+def preparing_for_sleep():
+    """True while logind is about to suspend (the lock-before-suspend window).
+
+    A capture taken then finishes after resume, and the power-down effect
+    would replay the old desktop over the lock screen on wake. Any error
+    counts as "not sleeping", so a locked-down bus never blocks the effect."""
+    try:
+        reply = subprocess.run(
+            ["busctl", "get-property", "org.freedesktop.login1", "/org/freedesktop/login1",
+             "org.freedesktop.login1.Manager", "PreparingForSleep"],
+            capture_output=True, text=True, timeout=0.3, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return reply.returncode == 0 and reply.stdout.split() == ["b", "true"]
+
+
 def main(args):
     runtime = runtime_dir()
     if args and args[0] == "capture":
+        if preparing_for_sleep():
+            print(json.dumps({"skipped": "sleep"}))
+            return
         print(json.dumps(capture(args[1:], runtime)))
     elif args and args[0] == "clean":
         for directory in args[1:]:

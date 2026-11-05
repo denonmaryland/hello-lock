@@ -1,6 +1,7 @@
 """Regression tests using disposable homes; never use the live configuration."""
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -320,6 +321,24 @@ class Snapshots(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(Path(result["files"]["eDP-1"]).stat().st_mode), 0o600)
         self.helper.clean(result["directory"], self.runtime)
         self.runtime.chmod(0o700)
+
+    def test_capture_is_skipped_while_preparing_for_sleep(self):
+        sleeping = mock.Mock(returncode=0, stdout="b true\n")
+        with mock.patch.object(self.helper.subprocess, "run", return_value=sleeping) as run, \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.helper.main(["capture", "eDP-1"])
+        self.assertEqual(json.loads(out.getvalue()), {"skipped": "sleep"})
+        self.assertEqual(run.call_count, 1)  # busctl only, no grim
+        self.assertEqual(list(self.runtime.glob(self.helper.PREFIX + "*")), [])
+
+    def test_sleep_check_failure_still_captures(self):
+        for side_effect in (FileNotFoundError("busctl"), self.helper.subprocess.TimeoutExpired("busctl", 0.3)):
+            with self.subTest(side_effect=type(side_effect).__name__), \
+                    mock.patch.object(self.helper.subprocess, "run", side_effect=side_effect):
+                self.assertFalse(self.helper.preparing_for_sleep())
+        awake = mock.Mock(returncode=0, stdout="b false\n")
+        with mock.patch.object(self.helper.subprocess, "run", return_value=awake):
+            self.assertFalse(self.helper.preparing_for_sleep())
 
     def test_symlink_runtime_is_rejected(self):
         link = self.runtime / "link"

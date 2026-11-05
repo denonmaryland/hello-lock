@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.2 — 2026-11-05
+
+- Waking from sleep no longer flashes the desktop before the lock screen.
+  Locking for suspend (lid closed, sleep from the menu) now skips the
+  power-down effect: its desktop capture finished after resume and the effect
+  replayed the old desktop over the lock screen. `bin/hello-snapshot` asks
+  logind whether the system is preparing for sleep, and the service drops any
+  capture that lands more than 2.5 s after the lock started (a suspend
+  happened in between). Locking by hand still plays the effect.
+
 ## 0.6.1 — 2026-11-05
 
 Omarchy 4.5 compatibility; still works on Omarchy 4.0.6. No change to the
