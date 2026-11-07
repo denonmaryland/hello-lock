@@ -303,10 +303,9 @@ Item {
 
   function refreshClock() {
     var now = new Date()
-    var h = now.getHours() % 12
-    if (h === 0) h = 12
+    var h = now.getHours()
     var m = now.getMinutes()
-    timeString = h + ":" + (m < 10 ? "0" + m : m)
+    timeString = (h < 10 ? "0" + h : h) + ":" + (m < 10 ? "0" + m : m)
     dateString = Qt.formatDate(now, "dddd · MMMM d").toUpperCase()
   }
 
