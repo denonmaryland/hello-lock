@@ -54,6 +54,11 @@ Item {
   // lock attempt failed; cleared only by finishUnlock() after PAM success.
   property bool lockCoverArmed: false
   readonly property bool lockCoverShown: lockRequested && lockCoverArmed && !unlockTransition
+  // While the session lock is missing, Hyprland still runs its keybindings: an
+  // exclusive layer only owns the keyboard. Until the lock is back, the cover
+  // must hold the keyboard so its shortcuts inhibitor stops them.
+  readonly property bool lockCoverGuarding: lockCoverShown && !sessionLock.secure
+  property int coverKeyboardMisses: 0
   property bool strandedLockResolved: false
   // Hello Lock: true while the lock view dims before release into the splash.
   property bool unlockTransition: false
@@ -455,6 +460,50 @@ Item {
     queueSessionLock()
   }
 
+  // Hyprland fades a new layer in from alpha 0, so a cover that maps during a
+  // loss (a refused first attempt, a new output) would show the desktop through
+  // it. A named rule maps it instantly; the name makes repeats replace it, and
+  // a config reload drops it, so every lock request applies it again.
+  function applyCoverRule() {
+    if (!coverRuleProc.running) coverRuleProc.running = true
+  }
+
+  function coverKeyboardHeld() {
+    var covers = lockCover.instances || []
+    for (var i = 0; i < covers.length; i++) if (covers[i] && covers[i].keyboardHeld) return true
+    return false
+  }
+
+  function coverShortcutsInhibited() {
+    var covers = lockCover.instances || []
+    for (var i = 0; i < covers.length; i++) if (covers[i] && covers[i].shortcutsInhibited) return true
+    return false
+  }
+
+  // Hyprland honours the cover's shortcuts inhibitor only while the cover has
+  // the keyboard, and a newer exclusive layer takes it. Take it back: a layer
+  // that becomes exclusive takes the keyboard (Hyprland's layer commit). Only a
+  // cover that has missed it for two checks is touched, because dropping
+  // exclusivity on the focused cover would hand the keyboard to the desktop.
+  function guardCoverKeyboard() {
+    var covers = lockCover.instances || []
+    for (var i = 0; i < covers.length; i++) {
+      if (covers[i] && covers[i].reclaiming) {
+        covers[i].reclaiming = false
+        return
+      }
+    }
+    if (!lockCoverGuarding || !covers.length || coverKeyboardHeld()) {
+      coverKeyboardMisses = 0
+      return
+    }
+    coverKeyboardMisses += 1
+    if (coverKeyboardMisses < 2) return
+    coverKeyboardMisses = 0
+    if (lastEvent !== "cover-keyboard: reclaiming") logEvent("cover-keyboard: reclaiming")
+    covers[0].reclaiming = true
+  }
+
   // ext-session-lock outlives its client, and a restart carries no lock over, so
   // a session locked this early may be an orphan behind Hyprland's failsafe. It
   // may also be another shell's live lock, which Hyprland would let this one
@@ -582,6 +631,7 @@ Item {
     try { if (unlockSplashLoader.item) unlockSplashLoader.item.finish() } catch (e3) { console.warn("unlock splash finish failed: " + e3) }
     resetAuthenticationState()
     lockRequested = true
+    applyCoverRule()
     armBlankTimer()
     logEvent("lock-requested")
     queueSessionLock()
@@ -776,24 +826,43 @@ Item {
   // surfaces, so the cover is unseen; if the lock is lost, this is what shows,
   // not the desktop, until relockLostLock() wins the lock back. PAM success
   // hides it with the unlock gate, so the splash is revealed as before.
+  // Hyprland keeps running keybindings without the session lock, so the cover
+  // also inhibits shortcuts and takes the keyboard back if another layer gets
+  // it (guardCoverKeyboard); applyCoverRule() makes it map instantly opaque.
   Variants {
     id: lockCover
     model: Quickshell.screens
 
     PanelWindow {
+      id: coverWindow
       required property var modelData
+      // Lowered for one guard tick to take the keyboard back; see guardCoverKeyboard().
+      property bool reclaiming: false
+      readonly property bool keyboardHeld: coverKeys.activeFocus
+      readonly property bool shortcutsInhibited: !!coverInhibitor.item && coverInhibitor.item.active
       screen: modelData
       visible: root.lockCoverShown
       anchors { top: true; bottom: true; left: true; right: true }
       color: "#000000"
       WlrLayershell.namespace: "hello-lock-cover"
       WlrLayershell.layer: WlrLayer.Overlay
-      WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+      WlrLayershell.keyboardFocus: reclaiming && root.lockCoverGuarding ? WlrKeyboardFocus.None : WlrKeyboardFocus.Exclusive
       exclusionMode: ExclusionMode.Ignore
+
+      // keyboard-shortcuts-inhibit: Hyprland skips its keybindings while this
+      // surface has the keyboard. Loaded by file so a Quickshell without the
+      // protocol loses only this layer of protection, not the lock service.
+      Loader {
+        id: coverInhibitor
+        source: Qt.resolvedUrl("platform/CoverShortcutInhibitor.qml")
+        onLoaded: item.window = coverWindow
+        onStatusChanged: if (status === Loader.Error) root.logEvent("cover-inhibitor: unavailable")
+      }
 
       // Swallow input: nothing typed here reaches the desktop below.
       MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; hoverEnabled: true }
       Item {
+        id: coverKeys
         anchors.fill: parent
         focus: true
         Keys.onPressed: function(event) { event.accepted = true }
@@ -1127,6 +1196,19 @@ Item {
   }
 
   Process {
+    id: coverRuleProc
+    // A fixed string: no user or config input reaches the compositor's Lua.
+    command: ["hyprctl", "eval", 'hl.layer_rule({ name = "hello-lock-cover", match = { namespace = "^hello-lock-cover$" }, no_anim = true, animation = "none" })']
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var reply = String(text || "").trim()
+        if (reply !== "ok") root.logEvent("cover-rule: " + (reply ? "refused" : "unavailable"))
+      }
+    }
+  }
+
+  Process {
     id: wakeProcess
     command: ["bash", "-c", "omarchy-system-wake"]
   }
@@ -1172,6 +1254,16 @@ Item {
 
   // Backstop for a lock that ends without any notification: while a lock is
   // requested, a missing compositor lock with no attempt pending is a loss.
+  // While the lock is missing, keep the cover's keyboard (and with it the
+  // shortcuts inhibitor) on the cover.
+  Timer {
+    id: coverKeyboardTimer
+    interval: 100
+    repeat: true
+    running: root.lockCoverGuarding
+    onTriggered: root.guardCoverKeyboard()
+  }
+
   Timer {
     id: lockGuardTimer
     interval: 1000
@@ -1420,6 +1512,7 @@ Item {
   Timer { id: statusStartTimer; interval: 1500; onTriggered: root.refreshStatus() }
 
   Component.onCompleted: {
+    applyCoverRule()
     refreshBackground()
     statusStartTimer.start()
     onboardingStartTimer.start()
@@ -1449,6 +1542,8 @@ Item {
         secure: sessionLock.secure,
         recovering: root.lockRequested && !sessionLock.secure && root.lockCoverArmed,
         covered: root.lockCoverShown,
+        coverKeyboard: root.coverKeyboardHeld(),
+        shortcutsInhibited: root.coverShortcutsInhibited(),
         realScreens: root.realScreenCount(),
         passwordPam: root.passwordPamConfigured,
         fingerprint: root.fingerprintConfigured,

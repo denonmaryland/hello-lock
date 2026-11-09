@@ -55,6 +55,22 @@ exec-once=''' + command + '\n'
         filename = 'config'
         (config / filename).write_text('output * mode 1280x800 scale 1\nxwayland disable\nexec ' + command + '\n')
     else:
+        if suite == 'lock-loss':
+            # Issue #2 review: real compositor conditions while the lock is
+            # missing. Animations on, with a slow layer fade-in so a cover that
+            # fades in is caught; a magenta desktop so any exposed pixel shows;
+            # an exec binding and an overlay binding that must stay inert.
+            lua = lua.replace('animations = {enabled = false}', 'animations = {enabled = true}')
+            lua = lua.replace('disable_hyprland_logo = true,', 'background_color = "rgb(ff00ff)", disable_hyprland_logo = true,')
+            lua += '''hl.animation({ leaf = "layers", enabled = true, speed = 30, bezier = "default", style = "fade" })
+hl.animation({ leaf = "layersIn", enabled = true, speed = 30, bezier = "default", style = "fade" })
+hl.animation({ leaf = "fadeLayersIn", enabled = true, speed = 30, bezier = "default" })
+hl.animation({ leaf = "layersOut", enabled = true, speed = 1, bezier = "default", style = "fade" })
+hl.animation({ leaf = "fadeLayersOut", enabled = true, speed = 1, bezier = "default" })
+hl.bind("SUPER + M", hl.dsp.exec_cmd("touch $HOME/qa-bind-marker"))
+hl.bind("SUPER + O", hl.dsp.exec_cmd("touch $HOME/qa-intruder-started; exec qs -p $HOME/qa-intruder"))
+'''
+            if not modern: raise RuntimeError('Lock-loss suite needs the Lua Hyprland config')
         if suite == 'standalone':
             lua = lua.replace('disable_hyprland_logo = true,', 'allow_session_lock_restore = true, disable_hyprland_logo = true,')
             legacy = legacy.replace('  disable_hyprland_logo=true', '  allow_session_lock_restore=true\n  disable_hyprland_logo=true')

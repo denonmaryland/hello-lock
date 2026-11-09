@@ -64,7 +64,16 @@ rejection, repeated lock requests, authenticated unlocks, three injected losses,
 three DPMS cycles and two virtual-output add/remove cycles. Hyprland's layer
 list also confirms the fail-closed `hello-lock-cover` overlay on every output
 behind the lock, immediately after each injected loss, on new outputs, and its
-removal after authenticated unlock. A Quickshell lock attempt that is refused
+removal after authenticated unlock. The guest runs with compositor animations
+on (a deliberately slow layer fade-in), a magenta desktop background and two
+keybindings: one runs an exec marker, one opens a second exclusive overlay. The
+harness then holds recovery open by releasing every relock as soon as it is
+secure, and checks that the cover keeps the keyboard and its shortcuts
+inhibitor, that grim frames show only the opaque cover (no desktop pixel), that
+neither binding runs, that the cover takes the keyboard back from a second
+exclusive overlay started directly, that a new output's cover is opaque in its
+first frame, and that a TTY switch (the recovery escape route) still works.
+Releasing the hold must relock without authentication. A Quickshell lock attempt that is refused
 silently cannot be induced in the guest; that path is covered by the mock
 service tests, which model Quickshell 0.3.2's `realizeLockTarget` behavior. It also disables
 config file watching and exercises actual Settings saves, instant authenticated

@@ -315,11 +315,18 @@ def source_bundle(destination, suite="visual", runtime_root=Path("/usr/share/oma
 
 def guest_keyboard(run, port, qmp, value, previous):
     sequence = value.get("sequence")
-    if type(sequence) is not int or sequence < 1 or sequence > 12 or value.get("action") not in ("wrong-password", "password"):
+    # Fixed chords only: the guest picks one by name, never sends key data.
+    chords = {"bind-marker": ["meta_l", "m"], "bind-intruder": ["meta_l", "o"],
+              "vt2": ["ctrl", "alt", "f2"], "vt1": ["ctrl", "alt", "f1"]}
+    if type(sequence) is not int or sequence < 1 or sequence > 40 or value.get("action") not in ("wrong-password", "password", *chords):
         raise ValueError("Unexpected guest input request")
     if sequence == previous: return previous
     if sequence != previous + 1: raise ValueError("Out-of-order guest input request")
     if qmp is None: raise RuntimeError("QMP is required for guest authentication")
+    if value["action"] in chords:
+        qmp.command("send-key", {"keys": [{"type": "qcode", "data": key} for key in chords[value["action"]]], "hold-time": 60})
+        subprocess.run(ssh_command(run, port) + ["printf '%s' '" + str(sequence) + "' > vm-input-ack"], check=True, capture_output=True, timeout=10)
+        return sequence
     # The generated credential goes only to the guest virtual keyboard, never
     # a command argument, log, source bundle or result artifact.
     qmp.text("incorrect123" if value["action"] == "wrong-password" else (run / "guest-password").read_text())
@@ -338,7 +345,7 @@ def guest_tests(run, port, guard=None, cache=None, distro=None, suite="visual", 
                            capture_output=True, timeout=30)
     if setup.returncode:
         raise RuntimeError("Guest desktop setup failed")
-    deadline = time.monotonic() + (420 if suite == "standalone" else 360 if suite == "lock-loss" else 240)
+    deadline = time.monotonic() + (420 if suite in ("standalone", "lock-loss") else 240)
     input_sequence = 0
     last_input = 0
     desktop_size = None

@@ -110,6 +110,42 @@ def main():
                         time.sleep(.08)
                     return False
 
+                def layer_namespaces(output=None):
+                    layers = json.loads(subprocess.run(['hyprctl', '-j', 'layers'], capture_output=True,
+                                                       text=True, check=True, timeout=5).stdout)
+                    return {layer.get('namespace') for name, monitor in layers.items() if output in (None, name)
+                            for level in (monitor.get('levels') or {}).values() for layer in level}
+
+                def frame(output=None):
+                    # Composited pixels as the compositor would show them (grim, PPM).
+                    data = subprocess.run(['grim', '-t', 'ppm'] + (['-o', output] if output else []) + ['-'],
+                                          capture_output=True, check=True, timeout=10).stdout
+                    fields, offset = [], 0
+                    while len(fields) < 4:
+                        while data[offset:offset + 1].isspace(): offset += 1
+                        end = offset
+                        while not data[end:end + 1].isspace(): end += 1
+                        fields.append(data[offset:end]); offset = end
+                    if fields[0] != b'P6' or fields[3] != b'255': raise RuntimeError('Unexpected grim frame')
+                    pixels = data[offset + 1:]
+                    count = magenta = black = 0
+                    for index in range(0, len(pixels) - 2, 3 * 17):
+                        r, g, b = pixels[index], pixels[index + 1], pixels[index + 2]
+                        count += 1
+                        magenta += r > 24 and b > 24 and g < 16
+                        black += r < 12 and g < 12 and b < 12
+                    return {'magenta': magenta, 'black': black / max(count, 1)}
+
+                def console():
+                    return subprocess.run(['sudo', '-n', 'fgconsole'], capture_output=True, text=True, timeout=5).stdout.strip()
+
+                def until(predicate, seconds=5, step=.03):
+                    deadline = time.monotonic() + seconds
+                    while time.monotonic() < deadline:
+                        if predicate(): return True
+                        time.sleep(step)
+                    return False
+
                 def keyboard(action):
                     nonlocal sequence
                     sequence += 1
@@ -156,6 +192,78 @@ def main():
                     recovered = wait(lambda value: value['secure'] and value['lossEvents'] > before)
                     check(recovered['requested'] and compositor_locked(), 'lost lock reacquired without authentication')
                     authenticate()
+
+                # Issue #2 review (T29): hold recovery open and prove that, with
+                # compositor animations on, the desktop stays covered and inert.
+                marker, started = home / 'qa-bind-marker', home / 'qa-intruder-started'
+                for path in (marker, started): path.unlink(missing_ok=True)
+                intruder_dir = home / 'qa-intruder'
+                intruder_dir.mkdir(exist_ok=True)
+                (intruder_dir / 'shell.qml').write_text('''import QtQuick
+import Quickshell
+import Quickshell.Wayland
+ShellRoot {
+  PanelWindow {
+    anchors { top: true; left: true }
+    implicitWidth: 320; implicitHeight: 200
+    color: "#00ff00"
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "qa-intruder"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+  }
+}
+''')
+                ipc('lock', 'lock')
+                wait(lambda value: value['secure'])
+                check(ipc('qa', 'hold') == 'holding', 'recovery held open by guest-only fault injection')
+                held = wait(lambda value: value['holding'] and value['requested'] and not value['secure']
+                            and value['covered'] and value['coverKeyboard'] and value['shortcutsInhibited'], 10)
+                check(held['holdDrops'] >= 1, 'held recovery keeps the cover, keyboard and shortcut inhibitor')
+                check(until(lambda: not compositor_locked(), 3), 'held recovery leaves the compositor unlocked')
+                shot = frame()
+                result['held_frame'] = shot
+                check(shot['magenta'] == 0 and shot['black'] >= .99, 'held recovery shows the opaque cover, not the desktop')
+                keyboard('bind-marker')
+                time.sleep(1.2)
+                check(not marker.exists(), 'exec keybinding stays inert while the lock is missing')
+                keyboard('bind-intruder')
+                time.sleep(1.5)
+                check(not started.exists() and 'qa-intruder' not in layer_namespaces(),
+                      'overlay keybinding stays inert while the lock is missing')
+                before = status()['reclaims']
+                intruder = subprocess.Popen(['qs', '-p', str(intruder_dir), '--no-color'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    check(until(lambda: 'qa-intruder' in layer_namespaces(), 10), 'second exclusive overlay maps during recovery')
+                    reclaimed = wait(lambda value: value['reclaims'] > before and value['coverKeyboard']
+                                     and value['shortcutsInhibited'] and value['holding'], 5)
+                    check(not reclaimed['secure'], 'cover takes the keyboard back from a second exclusive overlay')
+                    keyboard('bind-marker')
+                    time.sleep(1.2)
+                    check(not marker.exists(), 'exec keybinding stays inert after a second exclusive overlay')
+                finally:
+                    intruder.terminate()
+                    try: intruder.wait(timeout=5)
+                    except subprocess.TimeoutExpired: intruder.kill(); intruder.wait()
+                subprocess.run(['hyprctl', 'output', 'create', 'headless', 'LOCK-HOLD'], capture_output=True, check=True, timeout=5)
+                try:
+                    check(until(lambda: 'hello-lock-cover' in layer_namespaces('LOCK-HOLD'), 5), 'new output during recovery gets a cover')
+                    shot = frame('LOCK-HOLD')  # Taken as soon as it maps: a fade-in would still show magenta.
+                    result['new_output_frame'] = shot
+                    check(shot['magenta'] == 0 and shot['black'] >= .99, 'new output cover maps instantly opaque with animations on')
+                finally:
+                    subprocess.run(['hyprctl', 'output', 'remove', 'LOCK-HOLD'], capture_output=True, timeout=5)
+                keyboard('vt2')
+                check(until(lambda: console() == '2', 5, .2), 'TTY switch still works during recovery (escape route)')
+                keyboard('vt1')
+                check(until(lambda: console() == '1', 5, .2), 'switching back returns to the session')
+                wait(lambda value: value['holding'] and value['covered'], 10)
+                check(not marker.exists() and not started.exists(), 'no keybinding ran during held recovery')
+                check(ipc('qa', 'release') == 'released', 'held recovery released')
+                wait(lambda value: value['secure'] and value['requested'], 10)
+                check(compositor_locked(), 'released recovery relocks without authentication')
+                check(ipc('qa', 'clearEntry') == 'cleared', 'lock entry cleared before authenticating')
+                authenticate()
 
                 ipc('lock', 'lock')
                 wait(lambda value: value['secure'])

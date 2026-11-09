@@ -31,6 +31,7 @@ function context() {
     sessionLockStabilizeTimer: timer(), pendingSessionLockTimer: timer(),
     fingerprintRetryTimer: timer(), typingListProc: {running: false},
     snapshotProc: {running: false}, cleanSnapshotProc: {running: false},
+    coverRuleProc: {running: false}, lockCover: {instances: []}, coverKeyboardMisses: 0, lockCoverGuarding: false,
     passwordPam: {active: false}, fingerprintPam: {active: false},
     authenticatingPassword: false, fingerprintAuthenticating: false,
     enteredPassword: '', pendingPassword: '', failureMessage: '', failedAttempts: 0,
@@ -501,10 +502,86 @@ for (const start of ['first-lock', 'after-loss']) {
   assert.match(cover[1], /model: Quickshell\.screens/);
   assert.match(cover[1], /visible: root\.lockCoverShown/);
   assert.match(cover[1], /WlrLayershell\.layer: WlrLayer\.Overlay/);
-  assert.match(cover[1], /WlrLayershell\.keyboardFocus: WlrKeyboardFocus\.Exclusive/);
   assert.match(cover[1], /WlrLayershell\.namespace: "hello-lock-cover"/);
   assert.match(cover[1], /exclusionMode: ExclusionMode\.Ignore/);
   assert.match(cover[1], /color: "#000000"/, 'the cover is opaque');
+}
+{
+  // T29 P2: Hyprland fades a new layer in from alpha 0, so the cover must be
+  // exempt from layer animations before it can ever map.
+  const c = context();
+  assert.equal(c.beginLock(), true);
+  assert.equal(c.coverRuleProc.running, true, 'every lock request applies the instant-cover rule');
+  const rule = source.match(/  Process \{\n    id: coverRuleProc\n([\s\S]*?)^  \}/m);
+  assert.ok(rule, 'the cover rule process exists');
+  const command = rule[1].match(/command: (\[[^\n]*\])/);
+  assert.ok(command);
+  const argv = JSON.parse(JSON.stringify(vm.runInNewContext(command[1])));
+  assert.deepEqual(argv.slice(0, 2), ['hyprctl', 'eval']);
+  assert.match(argv[2], /^hl\.layer_rule\(\{ name = "hello-lock-cover", /, 'a named rule replaces itself instead of piling up');
+  assert.match(argv[2], /match = \{ namespace = "\^hello-lock-cover\$" \}/);
+  assert.match(argv[2], /no_anim = true/);
+  assert.match(argv[2], /animation = "none"/);
+  assert.match(source, /  Component\.onCompleted: \{\n    applyCoverRule\(\)\n/, 'the rule is applied at startup too');
+}
+{
+  // T29 P1: an exclusive layer is not an input barrier; Hyprland runs its
+  // keybindings unless the focused surface inhibits shortcuts.
+  const cover = source.match(/  Variants \{\n    id: lockCover\n([\s\S]*?)^  \}/m)[1];
+  assert.match(cover, /source: Qt\.resolvedUrl\("platform\/CoverShortcutInhibitor\.qml"\)/);
+  assert.match(cover, /onLoaded: item\.window = coverWindow/);
+  assert.match(cover, /readonly property bool keyboardHeld: coverKeys\.activeFocus/);
+  const inhibitor = fs.readFileSync(path.join(rootDir, 'platform/CoverShortcutInhibitor.qml'), 'utf8');
+  assert.match(inhibitor, /ShortcutInhibitor \{\n    id: inhibitor\n    window: guard\.window\n    enabled: guard\.window !== null\n  \}/);
+  const focus = cover.match(/WlrLayershell\.keyboardFocus: ([^\n]*)/);
+  assert.ok(focus, 'the cover keyboard mode is one binding');
+  const WlrKeyboardFocus = {None: 'none', Exclusive: 'exclusive'};
+  const mode = (reclaiming, guarding) => vm.runInNewContext(`(${focus[1]})`, {reclaiming, root: {lockCoverGuarding: guarding}, WlrKeyboardFocus});
+  assert.equal(mode(false, true), 'exclusive');
+  assert.equal(mode(true, true), 'none', 'a reclaim drops exclusivity for one tick');
+  assert.equal(mode(true, false), 'exclusive', 'a reclaim left over when the lock returns cannot release the keyboard');
+  const guarding = source.match(/readonly property bool lockCoverGuarding: ([^\n]*)/);
+  const guard = (state) => vm.runInNewContext(`(${guarding[1]})`, state);
+  assert.equal(guard({lockCoverShown: true, sessionLock: {secure: false}}), true, 'guard while the cover shows without a lock');
+  assert.equal(guard({lockCoverShown: true, sessionLock: {secure: true}}), false, 'the lock owns the keyboard while it holds');
+  assert.equal(guard({lockCoverShown: false, sessionLock: {secure: false}}), false);
+  const timer = source.match(/  Timer \{\n    id: coverKeyboardTimer\n([\s\S]*?)^  \}/m);
+  assert.ok(timer);
+  assert.match(timer[1], /running: root\.lockCoverGuarding\n/);
+  assert.match(timer[1], /repeat: true/);
+  assert.match(timer[1], /onTriggered: root\.guardCoverKeyboard\(\)/);
+  assert.ok(Number(timer[1].match(/interval: (\d+)/)[1]) <= 100);
+
+  const c = context();
+  const events = [];
+  c.lastEvent = 'init';
+  c.logEvent = (event) => { events.push(event); c.lastEvent = event };
+  const a = {keyboardHeld: true, reclaiming: false}, b = {keyboardHeld: false, reclaiming: false};
+  c.lockCover.instances = [a, b];
+  c.lockCoverGuarding = true;
+  for (let i = 0; i < 5; i++) c.guardCoverKeyboard();
+  assert.equal(a.reclaiming || b.reclaiming, false, 'a cover that holds the keyboard is never touched');
+  a.keyboardHeld = false; // Another exclusive layer took the keyboard.
+  c.guardCoverKeyboard();
+  assert.equal(a.reclaiming, false, 'one miss may be a focus change in flight: wait');
+  c.guardCoverKeyboard();
+  assert.equal(a.reclaiming, true, 'a second miss reclaims the keyboard');
+  assert.deepEqual(events, ['cover-keyboard: reclaiming']);
+  c.guardCoverKeyboard();
+  assert.equal(a.reclaiming, false, 'the next tick makes it exclusive again, which takes the keyboard');
+  a.keyboardHeld = true;
+  c.guardCoverKeyboard();
+  c.guardCoverKeyboard();
+  assert.equal(a.reclaiming, false);
+  a.keyboardHeld = false;
+  c.lockCoverGuarding = false; // The lock is back.
+  c.guardCoverKeyboard();
+  c.guardCoverKeyboard();
+  assert.equal(a.reclaiming, false, 'no reclaim while the lock holds the keyboard');
+  c.lockCover.instances = [];
+  c.lockCoverGuarding = true;
+  c.guardCoverKeyboard();
+  c.guardCoverKeyboard(); // No covers yet (output appearing): nothing to do.
 }
 console.log('Lock-loss recovery regressions passed (mock compositor; no real lock).');
 

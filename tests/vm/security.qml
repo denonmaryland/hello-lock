@@ -15,6 +15,11 @@ ShellRoot {
   property int lossEvents: 0
   property int animatedTransitions: 0
   property bool watcherDisabled: false
+  // Guest-only: while holding, every relock is released again as soon as it
+  // is secure, so recovery stays open as long as the test needs.
+  property bool holding: false
+  property int holdDrops: 0
+  property int reclaims: 0
 
   Loader {
     id: loader
@@ -39,11 +44,18 @@ ShellRoot {
         test.recoveries = test.recoveries.concat([Date.now() - test.lostAt])
         test.lostAt = 0
       }
+      if (test.holding && test.lock.secure) Qt.callLater(test.dropHeld)
     }
+  }
+  function dropHeld() {
+    if (!test.permitted || !test.holding || !test.lock.secure || !test.service.lockRequested) return
+    test.lock.locked = false
+    test.holdDrops += 1
   }
   Connections {
     target: test.service
     function onUnlockTransitionChanged() { if (test.service.unlockTransition) test.animatedTransitions += 1 }
+    function onLastEventChanged() { if (test.service.lastEvent === "cover-keyboard: reclaiming") test.reclaims += 1 }
   }
   function splashShown() {
     if (!test.service) return false
@@ -67,6 +79,9 @@ ShellRoot {
         savedName: test.service ? test.service.userConfig.name : "",
         splashShown: test.splashShown(),
         covered: test.service ? test.service.lockCoverShown : false,
+        coverKeyboard: test.service ? test.service.coverKeyboardHeld() : false,
+        shortcutsInhibited: test.service ? test.service.coverShortcutsInhibited() : false,
+        holding: test.holding, holdDrops: test.holdDrops, reclaims: test.reclaims,
         fingerprintConfigured: test.service ? test.service.fingerprintConfigured : false})
     }
     function saveTiming(animated: bool): string {
@@ -99,7 +114,23 @@ ShellRoot {
       test.lock.locked = false
       return "dropped"
     }
+    function hold(): string {
+      if (!test.permitted || !test.lock || !test.lock.secure || !test.service.lockRequested) return "refused"
+      test.holding = true
+      test.dropHeld()
+      return "holding"
+    }
+    function release(): string {
+      test.holding = false
+      return "released"
+    }
+    // Anything typed while a relock flickered past must not prefix the password.
+    function clearEntry(): string {
+      if (!test.permitted) return "refused"
+      test.service.enteredPassword = ""
+      return "cleared"
+    }
     function quit(): string { Qt.quit(); return "ok" }
   }
-  Timer { interval: 300000; running: true; onTriggered: Qt.quit() }
+  Timer { interval: 400000; running: true; onTriggered: Qt.quit() }
 }

@@ -18,7 +18,22 @@ Security follow-up to #2 (lock loss treated as an unlock). Thanks to
   and keeps keystrokes away from desktop apps until the lock is reacquired,
   instead of exposing the desktop for the relock window. PAM success hides it
   with the existing unlock gate; the first lock's power-down is unchanged.
-- `omarchy-shell lock status` adds `recovering` and `covered`.
+- The cover is now an input barrier against the compositor too. Without the
+  session lock, Hyprland still runs its keybindings (an exclusive layer only
+  owns the keyboard), so SUPER+SPACE or an exec binding still worked during a
+  loss. The cover now holds a keyboard-shortcuts-inhibit request, which
+  Hyprland honours for its focused surface, and takes the keyboard back within
+  a few hundred milliseconds if another exclusive layer gets it. TTY switching
+  is handled by Hyprland outside its keybindings, so Ctrl+Alt+F-keys still
+  reach a console for recovery. Bindings marked `dont_inhibit`, or
+  `binds:disable_keybind_grabbing`, are not stopped by this.
+- The cover maps instantly opaque. Hyprland fades new layers in from alpha 0,
+  which could show the desktop through a cover that maps during a loss (a
+  refused first attempt, a new output). Hello Lock registers a named
+  `no_anim` layer rule for `hello-lock-cover` through `hyprctl eval` at startup
+  and on every lock request.
+- `omarchy-shell lock status` adds `recovering`, `covered`, `coverKeyboard` and
+  `shortcutsInhibited`.
 - No change to the password, fingerprint or PAM code.
 
 ## 0.6.3 — 2026-11-05
