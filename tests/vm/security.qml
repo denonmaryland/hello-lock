@@ -88,6 +88,7 @@ ShellRoot {
         shortcutsInhibited: test.service ? test.service.coverShortcutsInhibited() : false,
         holding: test.holding, holdDrops: test.holdDrops, reclaims: test.reclaims,
         barrier: test.service ? test.service.compositorBarrier : false,
+        barrierState: test.service ? test.service.compositorBarrierState : "unknown",
         fingerprintConfigured: test.service ? test.service.fingerprintConfigured : false})
     }
     function saveTiming(animated: bool): string {

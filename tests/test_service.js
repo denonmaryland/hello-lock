@@ -33,7 +33,7 @@ function context() {
     snapshotProc: {running: false}, cleanSnapshotProc: {running: false},
     coverRuleProc: {running: false}, lockCover: {instances: []}, coverKeyboardMisses: 0, lockCoverGuarding: false,
     coverRuleResync: false, barrierResync: false, barrierProc: {running: false, wanted: false, command: []}, compositorBarrierWanted: false,
-    barrierOnLua: 'ON', barrierOffLua: 'OFF', coverRuleLua: 'RULE', barrierLinger: false, barrierLingerTimer: timer(), compositorBarrier: false,
+    barrierOnLua: 'ON', barrierOffLua: 'OFF', coverRuleLua: 'RULE', barrierLinger: false, barrierLingerTimer: timer(), compositorBarrierState: 'unknown', coverRuleLaunches: 0, coverRuleEpoch: 0, coverRuleValid: false,
     passwordPam: {active: false}, fingerprintPam: {active: false},
     authenticatingPassword: false, fingerprintAuthenticating: false,
     enteredPassword: '', pendingPassword: '', failureMessage: '', failedAttempts: 0,
@@ -593,16 +593,17 @@ for (const start of ['first-lock', 'after-loss']) {
   assert.match(strings.coverRuleLua, /^hl\.layer_rule\(\{ name = "hello-lock-cover", match = \{ namespace = "\^hello-lock-cover\$" \}, no_anim = true, animation = "none" \}\)$/);
   const on = strings.barrierOnLua.split('\n');
   assert.equal(on[0], strings.coverRuleLua, 'entering the barrier restores the no-fade rule first');
-  assert.ok(on.includes('  hl.define_submap("hello-lock-barrier", function() HELLO_LOCK_BARRIER_BIND = hl.bind("catchall", function() end, { ignore_mods = true }) end)'),
-    'the barrier submap holds only a catchall no-op, for keys with any modifiers too');
+  assert.ok(on.includes('  hl.define_submap("hello-lock-barrier", function() HELLO_LOCK_BARRIER_BIND = hl.bind("catchall", function() end, { ignore_mods = true, dont_inhibit = true }) end)'),
+    'the barrier submap holds only a catchall no-op, for keys with any modifiers, even to a surface that inhibits shortcuts');
   assert.ok(on.includes('if HELLO_LOCK_BARRIER_BIND == nil or tostring(HELLO_LOCK_BARRIER_BIND) == "HL.Keybind(expired)" then'),
     'the catchall is rebuilt when a reload expired it, not judged by the submap name');
   assert.ok(on.includes('hl.dispatch(hl.dsp.submap("hello-lock-barrier"))'), 'the barrier is entered every time');
   assert.equal(on.filter(line => line.includes('hl.bind(')).length, 1, 'no other bind lives in the barrier');
   assert.match(strings.barrierOnLua, /if hl\.get_current_submap\(\) ~= "hello-lock-barrier" then error\(/, 'a barrier that did not take reports failure');
-  assert.equal(strings.barrierOffLua, 'if hl.get_current_submap() == "hello-lock-barrier" then hl.dispatch(hl.dsp.submap("reset")) end',
-    'reset leaves any other submap alone');
-  assert.ok(!/locked|dont_inhibit|submap_universal/.test(strings.barrierOnLua), 'the catchall must not run under the real lock');
+  assert.equal(strings.barrierOffLua, 'if hl.get_current_submap() == "hello-lock-barrier" then hl.dispatch(hl.dsp.submap("reset")) end\n'
+    + 'if hl.get_current_submap() == "hello-lock-barrier" then error("hello-lock barrier still active") end',
+    'reset leaves any other submap alone, and a reset that did not take reports failure');
+  assert.ok(!/locked|submap_universal/.test(strings.barrierOnLua), 'the catchall must not run under the real lock, where typing goes to the password field');
 
   const wanted = source.match(/readonly property bool compositorBarrierWanted: ([^\n]*)/);
   const want = (state) => vm.runInNewContext(`(${wanted[1]})`, state);
@@ -657,17 +658,55 @@ for (const start of ['first-lock', 'after-loss']) {
   // A refused or lost barrier attempt is retried by the guard tick.
   const retry = context();
   retry.compositorBarrierWanted = true;
-  retry.compositorBarrier = false;
+  retry.compositorBarrierState = 'unknown';
   retry.ensureCompositorBarrier();
   assert.equal(retry.barrierProc.running, true, 'an unconfirmed barrier is retried');
   const held = context();
   held.compositorBarrierWanted = true;
-  held.compositorBarrier = true;
+  held.compositorBarrierState = 'on';
   held.ensureCompositorBarrier();
   assert.equal(held.barrierProc.running, false, 'a confirmed barrier is left alone');
   const idle = context();
+  idle.compositorBarrierState = 'off';
   idle.ensureCompositorBarrier();
-  assert.equal(idle.barrierProc.running, false, 'no barrier when none is wanted');
+  assert.equal(idle.barrierProc.running, false, 'a barrier confirmed off is left alone');
+
+  // T46 (3): a failed removal must not pass for off. Run the actual reply
+  // handler with a refused OFF, as after an unlock or at startup.
+  const collector = source.match(/    id: barrierProc\n[\s\S]*?      onStreamFinished: \{\n([\s\S]*?)\n      \}\n/);
+  assert.ok(collector, 'the barrier reply handler exists');
+  const off = context();
+  off.lockRequested = false;
+  off.compositorBarrierWanted = false;
+  off.compositorBarrierState = 'on';
+  off.logEvent = () => {};
+  off.syncCompositorBarrier();
+  assert.deepEqual(JSON.parse(JSON.stringify(off.barrierProc.command)), ['hyprctl', 'eval', 'OFF']);
+  const reply = (text) => vm.runInNewContext(`(function() {${collector[1]}\n})()`, {root: off, barrierProc: off.barrierProc, text});
+  reply('hello-lock barrier still active');
+  assert.equal(off.compositorBarrierState, 'unknown', 'a refused removal leaves the barrier unknown, not off');
+  off.barrierProc.running = false;
+  for (let i = 0; i < 5; i++) {
+    off.ensureCompositorBarrier();
+    assert.equal(off.barrierProc.running, true, 'removal is retried without a lock request');
+    assert.deepEqual(JSON.parse(JSON.stringify(off.barrierProc.command)), ['hyprctl', 'eval', 'OFF']);
+    reply('');
+    assert.equal(off.compositorBarrierState, 'unknown', 'no answer is not off either');
+    off.barrierProc.running = false;
+  }
+  off.ensureCompositorBarrier();
+  reply('ok');
+  assert.equal(off.compositorBarrierState, 'off', 'a confirmed removal ends the retries');
+  off.barrierProc.running = false;
+  off.ensureCompositorBarrier();
+  assert.equal(off.barrierProc.running, false);
+  const settle = source.match(/  Timer \{\n    id: barrierSettleTimer\n([\s\S]*?)^  \}/m);
+  assert.ok(settle, 'a settle timer retries removal');
+  assert.match(settle[1], /running: !root\.compositorBarrierWanted && root\.compositorBarrierState !== "off"\n/,
+    'it runs whenever the barrier is not wanted and not confirmed off, lock request or not');
+  assert.match(settle[1], /repeat: true/);
+  assert.match(settle[1], /onTriggered: root\.ensureCompositorBarrier\(\)/);
+  assert.match(source, /  property string compositorBarrierState: "unknown"\n/, 'a fresh service does not assume the barrier is off');
 
   // T32 P2: the rule must survive a compositor config reload.
   const r = context();
@@ -677,9 +716,9 @@ for (const start of ['first-lock', 'after-loss']) {
   const reload = context();
   reload.logEvent = () => {};
   reload.compositorBarrierWanted = true;
-  reload.compositorBarrier = true;
+  reload.compositorBarrierState = 'on';
   reload.handleCompositorReload();
-  assert.equal(reload.compositorBarrier, false, 'a reload leaves the barrier unconfirmed until rebuilt');
+  assert.equal(reload.compositorBarrierState, 'unknown', 'a reload leaves the barrier unconfirmed until rebuilt');
   assert.equal(reload.coverRuleProc.running, true, 'a reload reapplies the rule');
   assert.equal(reload.barrierProc.running, true, 'a reload during a loss rebuilds the barrier');
   const loss = lockLossContext();
@@ -689,6 +728,46 @@ for (const start of ['first-lock', 'after-loss']) {
   assert.match(source, /function onConfigReloaded\(\) \{ root\.handleCompositorReload\(\) \}/);
   const events = fs.readFileSync(path.join(rootDir, 'platform/HyprlandEvents.qml'), 'utf8');
   assert.match(events, /if \(event\.name === "configreloaded"\) events\.configReloaded\(\)/);
+}
+{
+  // T46 (4): a cover must not map before the no-fade rule is in place.
+  const c = context();
+  c.coverRuleProc = {running: false, launch: 0};
+  c.applyCoverRule();
+  assert.equal(c.coverRuleProc.launch, 1, 'each rule run gets a launch number');
+  const rule = source.match(/    id: coverRuleProc\n[\s\S]*?      onStreamFinished: \{\n([\s\S]*?)\n      \}\n/);
+  assert.ok(rule);
+  const answer = (text) => vm.runInNewContext(`(function() {${rule[1]}\n})()`, {root: c, coverRuleProc: c.coverRuleProc, text, Math});
+  c.logEvent = () => {};
+  answer('ok');
+  assert.equal(c.coverRuleEpoch, 1);
+  assert.equal(c.coverRuleValid, true);
+  c.compositorBarrierWanted = false;
+  c.coverRuleProc.running = false;
+  c.handleCompositorReload();
+  assert.equal(c.coverRuleValid, false, 'a reload invalidates the rule until a new run succeeds');
+  assert.equal(c.coverRuleProc.launch, 2);
+  answer('refused');
+  assert.equal(c.coverRuleValid, false, 'a refused run does not validate it');
+
+  const cover = source.match(/  Variants \{\n    id: lockCover\n([\s\S]*?)^  \}/m)[1];
+  const visible = cover.match(/\n      visible: ([^\n]*)/)[1];
+  const ready = cover.match(/readonly property bool ruleReady: ([^\n]*)/)[1];
+  const show = (state) => {
+    const w = Object.assign({shownLatched: false, ruleWaitExpired: false, ruleLaunchNeeded: 3}, state.w);
+    const root = Object.assign({lockCoverShown: true, coverRuleValid: true, coverRuleEpoch: 3}, state.root);
+    w.ruleReady = vm.runInNewContext(`(${ready})`, {root, ruleLaunchNeeded: w.ruleLaunchNeeded});
+    return vm.runInNewContext(`(${visible})`, Object.assign({root}, w));
+  };
+  assert.equal(show({}), true, 'a cover maps once a rule run started after it has succeeded');
+  assert.equal(show({root: {coverRuleEpoch: 2}}), false, 'an older run, perhaps before a reload, does not count');
+  assert.equal(show({root: {coverRuleValid: false}}), false, 'not after a reload until the rule is back');
+  assert.equal(show({root: {coverRuleValid: false}, w: {ruleWaitExpired: true}}), true, 'if Hyprland never confirms it, the cover maps anyway');
+  assert.equal(show({root: {coverRuleValid: false}, w: {shownLatched: true}}), true, 'a mapped cover is never unmapped by a reload');
+  assert.equal(show({root: {lockCoverShown: false}, w: {shownLatched: true}}), false);
+  assert.match(cover, /Component\.onCompleted: \{\n        ruleLaunchNeeded = root\.coverRuleLaunches \+ 1\n        root\.applyCoverRule\(\)\n      \}/,
+    'a new cover asks for a fresh rule run and waits for it');
+  assert.match(cover, /interval: 300\n        running: root\.lockCoverShown && !coverWindow\.visible && !coverWindow\.ruleReady\n/);
 }
 console.log('Lock-loss recovery regressions passed (mock compositor; no real lock).');
 {

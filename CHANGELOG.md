@@ -20,7 +20,17 @@ Closes the two known gaps 0.6.4 left in the fix for #2 (lock loss).
   reload, on each lock loss and on screen changes, as well as at startup and on
   each lock request. Before, a reload during a lock could make a newly mapped
   cover fade in.
-- `omarchy-shell lock status` adds `barrier`.
+- The barrier also holds against an app that requests its own
+  shortcut inhibition (the catchall is `dont_inhibit`, but never runs under
+  the real lock, where typing goes to the password field).
+- Removing the barrier is confirmed, not assumed. If Hyprland refuses or does
+  not answer, Hello Lock keeps retrying every second (after an unlock, at
+  startup, with or without a lock) instead of leaving every key swallowed on
+  the unlocked desktop.
+- A cover waits for Hyprland to confirm the no-fade rule before it first
+  appears, or appears anyway after 300 ms if Hyprland never confirms it. A
+  cover that is already shown is never hidden for this.
+- `omarchy-shell lock status` adds `barrier` and `barrierState`.
 - No change to the password, fingerprint or PAM code.
 
 ## 0.6.5 — 2026-11-09

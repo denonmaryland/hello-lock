@@ -57,7 +57,18 @@ def main():
             for module in ('Commons', 'Ui'):
                 (stage / module).symlink_to(source / 'omarchy/shell' / module, target_is_directory=True)
             shutil.copyfile(source / 'tests/vm/security.qml', stage / 'shell.qml')
-            env = dict(os.environ, HELLO_LOCK_DISPOSABLE_GUEST='1', HELLO_STATUS_WEATHER_CACHE=str(home/'weather.json'))
+            # Guest-only fault injection: while ~/qa-fail-barrier-off exists, the
+            # service's hyprctl refuses the barrier-removal command.
+            real_hyprctl = shutil.which('hyprctl')
+            shim = stage / 'shim'
+            shim.mkdir()
+            (shim / 'hyprctl').write_text('#!/bin/sh\n'
+                'if [ -e "$HOME/qa-fail-barrier-off" ] && [ "$1" = eval ] && printf %s "$2" | grep -q \'submap("reset")\'; then\n'
+                '  echo "qa: injected barrier removal failure"; exit 1\nfi\n'
+                'exec ' + real_hyprctl + ' "$@"\n')
+            (shim / 'hyprctl').chmod(0o700)
+            env = dict(os.environ, HELLO_LOCK_DISPOSABLE_GUEST='1', HELLO_STATUS_WEATHER_CACHE=str(home/'weather.json'),
+                       PATH=str(shim) + os.pathsep + os.environ.get('PATH', ''))
             with (home / 'security-tests.log').open('w') as log:
                 process = subprocess.Popen(['qs', '-p', str(stage), '--no-color'], env=env, stdout=log, stderr=subprocess.STDOUT)
 
@@ -228,6 +239,7 @@ import Quickshell
 import Quickshell.Wayland
 ShellRoot {
   PanelWindow {
+    id: intruderWindow
     anchors { top: true; left: true }
     implicitWidth: 320; implicitHeight: 200
     color: "#00ff00"
@@ -235,6 +247,8 @@ ShellRoot {
     WlrLayershell.namespace: "qa-intruder"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    // An overlay that also inhibits shortcuts, like any app may (T46).
+    ShortcutInhibitor { window: intruderWindow; enabled: true }
     Item {
       anchors.fill: parent
       focus: true
@@ -335,6 +349,21 @@ ShellRoot {
                 keyboard('bind-marker')
                 time.sleep(1.2)
                 check(not marker.exists(), 'exec keybinding stays inert after a reload during recovery')
+                # T46 (4): a reload and a new output at the same moment, both orders:
+                # the new cover must not map before the no-fade rule is back.
+                for order, name in (('reload then output', 'LOCK-RACE-A'), ('output then reload', 'LOCK-RACE-B')):
+                    commands = [['hyprctl', 'reload'], ['hyprctl', 'output', 'create', 'headless', name]]
+                    if order == 'output then reload': commands.reverse()
+                    children = [subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for command in commands]
+                    for child in children: child.wait(timeout=10)
+                    try:
+                        check(until(lambda: 'hello-lock-cover' in layer_namespaces(name), 5), order + ': new output gets a cover')
+                        shot = frame(name)
+                        result.setdefault('new_output_frames', {})[order] = shot
+                        check(shot['magenta'] == 0 and shot['black'] >= .99, order + ': cover is opaque from its first frame')
+                    finally:
+                        subprocess.run(['hyprctl', 'output', 'remove', name], capture_output=True, timeout=5)
+                    check(until(barrier_live, 5), order + ': the barrier is rebuilt')
                 keyboard('vt2')
                 check(until(lambda: console() == '2', 5, .2), 'TTY switch still works during recovery (escape route)')
                 keyboard('vt1')
@@ -361,6 +390,29 @@ ShellRoot {
                     stop(intruder)
                 keyboard('bind-marker')
                 check(until(marker.exists, 3), 'control: the exec keybinding runs when unlocked')
+                marker.unlink(missing_ok=True)
+
+                # T46 (3): a barrier removal that fails must not pass for off; it is
+                # retried after the unlock until it takes, or keys stay swallowed.
+                fail_off = home / 'qa-fail-barrier-off'
+                ipc('lock', 'lock')
+                wait(lambda value: value['secure'])
+                check(ipc('qa', 'hold') == 'holding', 'hold for the failed-removal check')
+                wait(lambda value: value['barrier'] and value['holding'], 10)
+                fail_off.touch()
+                check(ipc('qa', 'release') == 'released', 'released with barrier removal failing')
+                wait(lambda value: value['secure'] and value['requested'], 10)
+                check(ipc('qa', 'clearEntry') == 'cleared', 'entry cleared')
+                authenticate()
+                check(until(lambda: status()['barrierState'] == 'unknown' and submap() == 'hello-lock-barrier', 5),
+                      'a failed removal is reported unknown, not off')
+                time.sleep(2.5)
+                check(status()['barrierState'] == 'unknown' and submap() == 'hello-lock-barrier', 'removal keeps being retried while it fails')
+                fail_off.unlink()
+                check(until(lambda: submap() == 'default' and status()['barrierState'] == 'off', 5),
+                      'the removal is retried after the unlock until it takes')
+                keyboard('bind-marker')
+                check(until(marker.exists, 3), 'keybindings work again after the retried removal')
                 marker.unlink(missing_ok=True)
 
                 ipc('lock', 'lock')
@@ -421,15 +473,23 @@ ShellRoot {
                 process.kill()
                 process.wait()
                 check(submap() == 'hello-lock-barrier', 'a killed service leaves the barrier behind')
+                fail_off = home / 'qa-fail-barrier-off'
+                fail_off.touch()
                 process = subprocess.Popen(['qs', '-p', str(stage), '--no-color'], env=env, stdout=log, stderr=subprocess.STDOUT)
                 wait(lambda value: value['ready'], 20)
-                check(until(lambda: submap() == 'default', 5), 'a restarted service resets the barrier')
+                time.sleep(2.5)
+                check(submap() == 'hello-lock-barrier' and status()['barrierState'] == 'unknown',
+                      'a failed startup reset is reported unknown, not off')
+                fail_off.unlink()
+                check(until(lambda: submap() == 'default' and status()['barrierState'] == 'off', 5), 'a restarted service retries the reset until it takes')
                 result['pam_policy'] = 'Arch guest system-auth under omarchy-lock-password'
                 result['status'] = 'passed'
                 ipc('qa', 'quit')
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         # Errors contain no keyboard payload or raw service log.
         result['error'] = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+    except Exception as error:  # A harness bug must still say what stopped the run.
+        result['error'] = 'Unexpected ' + type(error).__name__
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

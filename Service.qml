@@ -70,20 +70,32 @@ Item {
   // at startup (a crashed shell cannot leave it on).
   property bool barrierLinger: false
   readonly property bool compositorBarrierWanted: lockRequested && (lockCoverGuarding || barrierLinger)
-  property bool compositorBarrier: false
+  // "on" or "off" only once Hyprland confirmed it; anything that failed is
+  // "unknown" and is retried. A failed removal must never pass for off: the
+  // barrier would keep swallowing every key on the unlocked desktop.
+  property string compositorBarrierState: "unknown"
+  readonly property bool compositorBarrier: compositorBarrierState === "on"
   property bool barrierResync: false
   property bool coverRuleResync: false
+  // The no-fade rule, as confirmed by Hyprland: each run gets a launch number,
+  // and coverRuleEpoch is the last one Hyprland answered "ok". A reload drops
+  // the rule, so coverRuleValid is false until a run after it succeeds. A cover
+  // that is not mapped yet waits for a run that started after it was created.
+  property int coverRuleLaunches: 0
+  property int coverRuleEpoch: 0
+  property bool coverRuleValid: false
   // Fixed strings: no user or config input reaches the compositor's Lua.
   readonly property string coverRuleLua: 'hl.layer_rule({ name = "hello-lock-cover", match = { namespace = "^hello-lock-cover$" }, no_anim = true, animation = "none" })'
   // A reload drops binds but keeps the current submap's name, so the catchall
   // itself is checked (an expired bind object, as Omarchy's config does).
   readonly property string barrierOnLua: coverRuleLua + '\n'
     + 'if HELLO_LOCK_BARRIER_BIND == nil or tostring(HELLO_LOCK_BARRIER_BIND) == "HL.Keybind(expired)" then\n'
-    + '  hl.define_submap("hello-lock-barrier", function() HELLO_LOCK_BARRIER_BIND = hl.bind("catchall", function() end, { ignore_mods = true }) end)\n'
+    + '  hl.define_submap("hello-lock-barrier", function() HELLO_LOCK_BARRIER_BIND = hl.bind("catchall", function() end, { ignore_mods = true, dont_inhibit = true }) end)\n'
     + 'end\n'
     + 'hl.dispatch(hl.dsp.submap("hello-lock-barrier"))\n'
     + 'if hl.get_current_submap() ~= "hello-lock-barrier" then error("hello-lock barrier not entered") end'
-  readonly property string barrierOffLua: 'if hl.get_current_submap() == "hello-lock-barrier" then hl.dispatch(hl.dsp.submap("reset")) end'
+  readonly property string barrierOffLua: 'if hl.get_current_submap() == "hello-lock-barrier" then hl.dispatch(hl.dsp.submap("reset")) end\n'
+    + 'if hl.get_current_submap() == "hello-lock-barrier" then error("hello-lock barrier still active") end'
   onCompositorBarrierWantedChanged: syncCompositorBarrier()
   onLockCoverGuardingChanged: {
     if (lockCoverGuarding) {
@@ -505,6 +517,8 @@ Item {
       coverRuleResync = true
       return
     }
+    coverRuleLaunches += 1
+    coverRuleProc.launch = coverRuleLaunches
     coverRuleProc.running = true
   }
 
@@ -523,14 +537,16 @@ Item {
   // The guard tick retries a barrier Hyprland has not confirmed (a refused or
   // lost attempt), so it cannot stay down for the rest of a loss.
   function ensureCompositorBarrier() {
-    if (compositorBarrierWanted && !compositorBarrier && !barrierProc.running) syncCompositorBarrier()
+    if (barrierProc.running) return
+    if (compositorBarrierState !== (compositorBarrierWanted ? "on" : "off")) syncCompositorBarrier()
   }
 
   // A reload clears Lua rules and binds (the barrier submap's catchall too).
   function handleCompositorReload() {
     logEvent("compositor-reloaded")
     // Unconfirmed until rebuilt: the guard tick retries it if this attempt fails.
-    compositorBarrier = false
+    if (compositorBarrierWanted) compositorBarrierState = "unknown"
+    coverRuleValid = false
     applyCoverRule()
     if (compositorBarrierWanted) syncCompositorBarrier()
   }
@@ -909,8 +925,33 @@ Item {
       property bool reclaiming: false
       readonly property bool keyboardHeld: coverKeys.activeFocus
       readonly property bool shortcutsInhibited: !!coverInhibitor.item && coverInhibitor.item.active
+      // Mapping waits for the no-fade rule (a run started after this cover was
+      // created, since the last reload), or 300 ms if Hyprland never confirms
+      // it: a fading cover still beats none. A mapped cover stays mapped.
+      property int ruleLaunchNeeded: 0
+      property bool ruleWaitExpired: false
+      property bool shownLatched: false
+      readonly property bool ruleReady: root.coverRuleValid && root.coverRuleEpoch >= ruleLaunchNeeded
       screen: modelData
-      visible: root.lockCoverShown
+      visible: root.lockCoverShown && (shownLatched || ruleReady || ruleWaitExpired)
+      onVisibleChanged: if (visible) shownLatched = true
+      onRuleReadyChanged: if (ruleReady) ruleWaitExpired = false
+      Component.onCompleted: {
+        ruleLaunchNeeded = root.coverRuleLaunches + 1
+        root.applyCoverRule()
+      }
+      Connections {
+        target: root
+        function onLockCoverShownChanged() { if (!root.lockCoverShown) coverWindow.shownLatched = false }
+      }
+      Timer {
+        interval: 300
+        running: root.lockCoverShown && !coverWindow.visible && !coverWindow.ruleReady
+        onTriggered: {
+          coverWindow.ruleWaitExpired = true
+          root.logEvent("cover-rule: unconfirmed, cover mapped anyway")
+        }
+      }
       anchors { top: true; bottom: true; left: true; right: true }
       color: "#000000"
       WlrLayershell.namespace: "hello-lock-cover"
@@ -1275,12 +1316,18 @@ Item {
 
   Process {
     id: coverRuleProc
+    property int launch: 0
     command: ["hyprctl", "eval", root.coverRuleLua]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         var reply = String(text || "").trim()
-        if (reply !== "ok") root.logEvent("cover-rule: " + (reply ? "refused" : "unavailable"))
+        if (reply === "ok") {
+          root.coverRuleEpoch = Math.max(root.coverRuleEpoch, coverRuleProc.launch)
+          root.coverRuleValid = true
+        } else {
+          root.logEvent("cover-rule: " + (reply ? "refused" : "unavailable"))
+        }
       }
     }
     onExited: {
@@ -1298,7 +1345,7 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         var reply = String(text || "").trim()
-        root.compositorBarrier = barrierProc.wanted && reply === "ok"
+        root.compositorBarrierState = reply === "ok" ? (barrierProc.wanted ? "on" : "off") : "unknown"
         // Hyprland's own error text (no user input), cut short for the log.
         if (reply !== "ok") root.logEvent("barrier: " + (barrierProc.wanted ? "on" : "off") + " " + (reply ? "refused: " + reply.replace(/\s+/g, " ").slice(0, 160) : "unavailable"))
         else if (barrierProc.wanted) root.logEvent("barrier: on")
@@ -1372,6 +1419,16 @@ Item {
 
   // Backstop for a lock that ends without any notification: while a lock is
   // requested, a missing compositor lock with no attempt pending is a loss.
+  // Until Hyprland confirms the barrier is off, keep trying to remove it: after
+  // an unlock, at startup, with or without a lock request.
+  Timer {
+    id: barrierSettleTimer
+    interval: 1000
+    repeat: true
+    running: !root.compositorBarrierWanted && root.compositorBarrierState !== "off"
+    onTriggered: root.ensureCompositorBarrier()
+  }
+
   // Lifts the barrier once the lock has held this long without another loss.
   Timer {
     id: barrierLingerTimer
@@ -1677,6 +1734,7 @@ Item {
         coverKeyboard: root.coverKeyboardHeld(),
         shortcutsInhibited: root.coverShortcutsInhibited(),
         barrier: root.compositorBarrier,
+        barrierState: root.compositorBarrierState,
         realScreens: root.realScreenCount(),
         passwordPam: root.passwordPamConfigured,
         fingerprint: root.fingerprintConfigured,
