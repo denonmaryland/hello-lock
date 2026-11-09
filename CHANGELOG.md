@@ -33,6 +33,20 @@ Closes the two known gaps 0.6.4 left in the fix for #2 (lock loss).
 - `omarchy-shell lock status` adds `barrier` and `barrierState`.
 - No change to the password, fingerprint or PAM code.
 
+### Known gaps
+
+The barrier reacts to a loss rather than being in place for the whole lock,
+so locked binds (volume, brightness, media, the power key and the lid switch)
+keep working on the lock screen. That leaves two short windows without it:
+
+- From the moment the compositor drops the lock until Hello Lock's barrier
+  command reaches Hyprland. The cover's shortcut inhibition covers this only
+  if the cover already has the keyboard.
+- From a Hyprland config reload during a loss until Hello Lock rebuilds the
+  barrier's catchall after the reload event.
+
+Both are expected to last milliseconds, but they were not measured.
+
 ## 0.6.5 — 2026-11-09
 
 Fixes a Medium finding from the Omarchy plugin marketplace review of 0.6.3
