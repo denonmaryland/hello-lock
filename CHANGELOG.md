@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.4 — 2026-11-09
 
 Security follow-up to #2 (lock loss treated as an unlock). Thanks to
 @mendumohanpramodh-debug for the report.
@@ -35,6 +35,19 @@ Security follow-up to #2 (lock loss treated as an unlock). Thanks to
 - `omarchy-shell lock status` adds `recovering`, `covered`, `coverKeyboard` and
   `shortcutsInhibited`.
 - No change to the password, fingerprint or PAM code.
+
+### Known gaps
+
+0.6.4 is a mitigation for #2, not the complete fix; the issue stays open and
+the hardening is planned for 0.6.5.
+
+- If another full-screen overlay with exclusive keyboard focus appears while
+  the lock is lost, shortcuts and typing can reach that overlay for about
+  0.2–0.3 s before the cover takes the keyboard back.
+- Reloading the Hyprland config during a lock drops the no-animation rule
+  until the next lock. A cover that first appears after such a reload (for
+  example on a newly connected output during a loss) can fade in instead of
+  appearing fully opaque at once.
 
 ## 0.6.3 — 2026-11-05
 
