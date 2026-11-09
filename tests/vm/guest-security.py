@@ -311,8 +311,12 @@ ShellRoot {
                 intruder = start_intruder()
                 try:
                     check(until(lambda: 'qa-intruder' in layer_namespaces(), 10, .02), 'second exclusive overlay maps during the burst')
-                    reclaimed = wait(lambda value: value['reclaims'] > before and value['coverKeyboard'] and value['holding'], 5)
-                    check(not reclaimed['secure'], 'cover takes the keyboard back from a second exclusive overlay')
+                    # The cover gets the keyboard back either by its own reclaim or
+                    # when a relock in the held loop hands focus back; either way
+                    # the barrier, not focus, is what keeps input out meanwhile.
+                    reclaimed = wait(lambda value: value['coverKeyboard'] and value['shortcutsInhibited'] and value['holding'], 5)
+                    result['reclaim_events'] = reclaimed['reclaims'] - before
+                    check(not reclaimed['secure'], 'cover has the keyboard again after a second exclusive overlay')
                     await_ack(burst)
                     time.sleep(.5)
                     check(not marker.exists(), 'no exec keybinding ran from overlay mapping through reclaim')
