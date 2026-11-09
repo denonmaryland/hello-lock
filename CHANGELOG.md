@@ -28,8 +28,8 @@ Closes the two known gaps 0.6.4 left in the fix for #2 (lock loss).
   startup, with or without a lock) instead of leaving every key swallowed on
   the unlocked desktop.
 - A cover waits for Hyprland to confirm the no-fade rule before it first
-  appears, or appears anyway after 300 ms if Hyprland never confirms it. A
-  cover that is already shown is never hidden for this.
+  appears. Only a confirmation from a run started after the last config reload
+  counts. A cover that is already shown is never hidden for this.
 - `omarchy-shell lock status` adds `barrier` and `barrierState`.
 - No change to the password, fingerprint or PAM code.
 
@@ -46,6 +46,12 @@ keep working on the lock screen. That leaves two short windows without it:
   barrier's catchall after the reload event.
 
 Both are expected to last milliseconds, but they were not measured.
+
+- If Hyprland never confirms the no-fade rule (for example, `hyprctl eval` is
+  unavailable), a cover appears anyway after 300 ms and may fade in instead of
+  appearing fully opaque at once. This is deliberate: the other choice is a
+  cover that never appears, which would leave the desktop exposed for the
+  whole loss.
 
 ## 0.6.5 — 2026-11-09
 

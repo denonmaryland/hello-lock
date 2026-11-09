@@ -33,7 +33,7 @@ function context() {
     snapshotProc: {running: false}, cleanSnapshotProc: {running: false},
     coverRuleProc: {running: false}, lockCover: {instances: []}, coverKeyboardMisses: 0, lockCoverGuarding: false,
     coverRuleResync: false, barrierResync: false, barrierProc: {running: false, wanted: false, command: []}, compositorBarrierWanted: false,
-    barrierOnLua: 'ON', barrierOffLua: 'OFF', coverRuleLua: 'RULE', barrierLinger: false, barrierLingerTimer: timer(), compositorBarrierState: 'unknown', coverRuleLaunches: 0, coverRuleEpoch: 0, coverRuleValid: false,
+    barrierOnLua: 'ON', barrierOffLua: 'OFF', coverRuleLua: 'RULE', barrierLinger: false, barrierLingerTimer: timer(), compositorBarrierState: 'unknown', coverRuleLaunches: 0, coverRuleEpoch: 0, coverRuleValid: false, coverRuleMinLaunch: 0,
     passwordPam: {active: false}, fingerprintPam: {active: false},
     authenticatingPassword: false, fingerprintAuthenticating: false,
     enteredPassword: '', pendingPassword: '', failureMessage: '', failedAttempts: 0,
@@ -750,6 +750,27 @@ for (const start of ['first-lock', 'after-loss']) {
   answer('refused');
   assert.equal(c.coverRuleValid, false, 'a refused run does not validate it');
 
+  // T51: a run that started before a reload can answer "ok" after it, for a
+  // rule the reload erased. That reply must not revalidate the rule.
+  const stale = context();
+  stale.coverRuleProc = {running: false, launch: 0};
+  stale.logEvent = () => {};
+  stale.compositorBarrierWanted = false;
+  stale.applyCoverRule(); // launch 1 in flight
+  stale.handleCompositorReload(); // reload while it runs: only a later launch counts
+  assert.equal(stale.coverRuleResync, true, 'the post-reload run is queued behind the one in flight');
+  const staleAnswer = (text) => vm.runInNewContext(`(function() {${rule[1]}\n})()`, {root: stale, coverRuleProc: stale.coverRuleProc, text, Math});
+  staleAnswer('ok'); // launch 1 answers late
+  assert.equal(stale.coverRuleValid, false, 'a pre-reload reply cannot revalidate an erased rule');
+  assert.equal(stale.coverRuleEpoch, 0);
+  stale.coverRuleProc.running = false;
+  stale.coverRuleResync = false;
+  stale.applyCoverRule(); // the queued post-reload run (launch 2)
+  assert.equal(stale.coverRuleProc.launch, 2);
+  staleAnswer('ok');
+  assert.equal(stale.coverRuleValid, true, 'the post-reload run confirms it');
+  assert.equal(stale.coverRuleEpoch, 2);
+
   const cover = source.match(/  Variants \{\n    id: lockCover\n([\s\S]*?)^  \}/m)[1];
   const visible = cover.match(/\n      visible: ([^\n]*)/)[1];
   const ready = cover.match(/readonly property bool ruleReady: ([^\n]*)/)[1];
@@ -762,7 +783,11 @@ for (const start of ['first-lock', 'after-loss']) {
   assert.equal(show({}), true, 'a cover maps once a rule run started after it has succeeded');
   assert.equal(show({root: {coverRuleEpoch: 2}}), false, 'an older run, perhaps before a reload, does not count');
   assert.equal(show({root: {coverRuleValid: false}}), false, 'not after a reload until the rule is back');
-  assert.equal(show({root: {coverRuleValid: false}, w: {ruleWaitExpired: true}}), true, 'if Hyprland never confirms it, the cover maps anyway');
+  // Deliberate trade-off (kept): if Hyprland never confirms the rule within
+  // 300 ms, the cover maps anyway and may fade in. The alternative, a cover
+  // that never maps, would leave the desktop exposed for the whole loss.
+  assert.equal(show({root: {coverRuleValid: false}, w: {ruleWaitExpired: true}}), true,
+    'unconfirmed after 300 ms: map a cover that may fade in rather than none');
   assert.equal(show({root: {coverRuleValid: false}, w: {shownLatched: true}}), true, 'a mapped cover is never unmapped by a reload');
   assert.equal(show({root: {lockCoverShown: false}, w: {shownLatched: true}}), false);
   assert.match(cover, /Component\.onCompleted: \{\n        ruleLaunchNeeded = root\.coverRuleLaunches \+ 1\n        root\.applyCoverRule\(\)\n      \}/,

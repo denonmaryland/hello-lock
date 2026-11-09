@@ -84,6 +84,9 @@ Item {
   property int coverRuleLaunches: 0
   property int coverRuleEpoch: 0
   property bool coverRuleValid: false
+  // The first launch a reply may count from: a run that started before the
+  // last reload may answer "ok" after it, for a rule the reload has erased.
+  property int coverRuleMinLaunch: 0
   // Fixed strings: no user or config input reaches the compositor's Lua.
   readonly property string coverRuleLua: 'hl.layer_rule({ name = "hello-lock-cover", match = { namespace = "^hello-lock-cover$" }, no_anim = true, animation = "none" })'
   // A reload drops binds but keeps the current submap's name, so the catchall
@@ -547,6 +550,7 @@ Item {
     // Unconfirmed until rebuilt: the guard tick retries it if this attempt fails.
     if (compositorBarrierWanted) compositorBarrierState = "unknown"
     coverRuleValid = false
+    coverRuleMinLaunch = coverRuleLaunches + 1
     applyCoverRule()
     if (compositorBarrierWanted) syncCompositorBarrier()
   }
@@ -926,8 +930,10 @@ Item {
       readonly property bool keyboardHeld: coverKeys.activeFocus
       readonly property bool shortcutsInhibited: !!coverInhibitor.item && coverInhibitor.item.active
       // Mapping waits for the no-fade rule (a run started after this cover was
-      // created, since the last reload), or 300 ms if Hyprland never confirms
-      // it: a fading cover still beats none. A mapped cover stays mapped.
+      // created, and after the last reload). If Hyprland never confirms it, the
+      // cover maps anyway after 300 ms and may fade in: a cover that fades in
+      // still beats one that never maps, which would leave the desktop exposed.
+      // A mapped cover stays mapped.
       property int ruleLaunchNeeded: 0
       property bool ruleWaitExpired: false
       property bool shownLatched: false
@@ -1322,10 +1328,10 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         var reply = String(text || "").trim()
-        if (reply === "ok") {
+        if (reply === "ok" && coverRuleProc.launch >= root.coverRuleMinLaunch) {
           root.coverRuleEpoch = Math.max(root.coverRuleEpoch, coverRuleProc.launch)
           root.coverRuleValid = true
-        } else {
+        } else if (reply !== "ok") {
           root.logEvent("cover-rule: " + (reply ? "refused" : "unavailable"))
         }
       }
