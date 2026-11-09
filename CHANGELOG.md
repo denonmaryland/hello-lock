@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+Security follow-up to #2 (lock loss treated as an unlock). Thanks to
+@mendumohanpramodh-debug for the report.
+
+- A lock attempt that Quickshell cannot complete is retried instead of being
+  forgotten. Quickshell 0.3.2 abandons such an attempt without
+  `lockStateChanged` or `secureStateChanged`, which left the request latched
+  over an unlocked desktop (`omarchy-shell lock status` still said
+  `locked: true`) with nothing left to retry it. The first lock had the same gap.
+- A one-second guard re-runs lock-loss recovery for the whole lock request, so
+  a loss that arrives with no notification at all is still recovered.
+- Fail closed while recovering: from the first secure moment of a lock until an
+  authenticated unlock, an opaque overlay cover with exclusive keyboard focus
+  sits on every screen behind the session lock. A lost lock now shows the cover
+  and keeps keystrokes away from desktop apps until the lock is reacquired,
+  instead of exposing the desktop for the relock window. PAM success hides it
+  with the existing unlock gate; the first lock's power-down is unchanged.
+- `omarchy-shell lock status` adds `recovering` and `covered`.
+- No change to the password, fingerprint or PAM code.
+
 ## 0.6.3 — 2026-11-05
 
 - The Caps Lock badge and the failure hint now work on keyboards with no Caps

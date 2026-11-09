@@ -89,6 +89,27 @@ def main():
                                                         text=True, check=True, timeout=5).stdout)
                     return bool(outputs) and all('LOCK' in output.get('solitaryBlockedBy', []) for output in outputs)
 
+                def monitor_names():
+                    outputs = json.loads(subprocess.run(['hyprctl', '-j', 'monitors'], capture_output=True,
+                                                        text=True, check=True, timeout=5).stdout)
+                    return {output['name'] for output in outputs}
+
+                def covered_monitors():
+                    # The fail-closed cover is an overlay layer; Hyprland lists it per output.
+                    layers = json.loads(subprocess.run(['hyprctl', '-j', 'layers'], capture_output=True,
+                                                       text=True, check=True, timeout=5).stdout)
+                    return {name for name, monitor in layers.items()
+                            if any(layer.get('namespace') == 'hello-lock-cover'
+                                   for level in (monitor.get('levels') or {}).values() for layer in level)}
+
+                def wait_cover(present, seconds=5):
+                    deadline = time.monotonic() + seconds
+                    while time.monotonic() < deadline:
+                        names = monitor_names()
+                        if (covered_monitors() >= names) if present else not covered_monitors(): return True
+                        time.sleep(.08)
+                    return False
+
                 def keyboard(action):
                     nonlocal sequence
                     sequence += 1
@@ -107,6 +128,7 @@ def main():
                     wait(lambda value: not value['secure'] and not value['requested'], 15)
                     time.sleep(.8)
                     check(not status()['requested'] and not compositor_locked(), 'authenticated unlock remains released')
+                    check(wait_cover(False, 3) and not status()['covered'], 'authenticated unlock removes the fail-closed cover')
                     # Dismiss the cosmetic splash through its normal input path
                     # on the next lock; beginLock() also finishes it directly.
 
@@ -114,6 +136,7 @@ def main():
                 check(ipc('lock', 'lock') == 'ok', 'lock request accepted')
                 wait(lambda value: value['secure'])
                 check(compositor_locked(), 'compositor confirms real lock on all outputs')
+                check(wait_cover(True) and status()['covered'], 'fail-closed cover is mapped behind the lock on every output')
                 check(ipc('lock', 'lock') == 'ok' and status()['secure'], 'repeated lock preserves secure state')
                 keyboard('wrong-password')
                 wait(lambda value: value['attempts'] == 1 and not value['authenticating'], 15)
@@ -126,6 +149,10 @@ def main():
                     wait(lambda value: value['secure'])
                     before = status()['lossEvents']
                     check(ipc('qa', 'drop') == 'dropped', 'real lock released by guest-only fault injection')
+                    # Taken at once, inside the relock window: the cover, not the desktop.
+                    exposed = not compositor_locked()
+                    check(covered_monitors() >= monitor_names(), 'lost lock leaves the cover on every output')
+                    result.setdefault('cover_during_loss', []).append({'compositor_unlocked': exposed, 'covered': True})
                     recovered = wait(lambda value: value['secure'] and value['lossEvents'] > before)
                     check(recovered['requested'] and compositor_locked(), 'lost lock reacquired without authentication')
                     authenticate()
@@ -140,6 +167,7 @@ def main():
                         time.sleep(.6)
                     wait(lambda value: value['secure'] and value['requested'])
                     check(compositor_locked(), 'DPMS cycle ends with compositor lock held')
+                    check(wait_cover(True), 'DPMS cycle keeps the cover on every output')
                 for _ in range(2):
                     subprocess.run(['hyprctl', 'output', 'create', 'headless', 'LOCK-QA'], capture_output=True, check=True, timeout=5)
                     time.sleep(.8)
@@ -148,10 +176,12 @@ def main():
                                                         text=True, check=True, timeout=5).stdout)
                     check(any(output['name'] == 'LOCK-QA' for output in outputs) and len(outputs) >= 2,
                           'new virtual output is present and compositor-protected')
+                    check(wait_cover(True) and 'LOCK-QA' in covered_monitors(), 'new virtual output gets the cover')
                     subprocess.run(['hyprctl', 'output', 'remove', 'LOCK-QA'], capture_output=True, check=True, timeout=5)
                     time.sleep(.8)
                     wait(lambda value: value['secure'] and value['requested'] and compositor_locked())
                     check(True, 'virtual output removal preserves compositor lock')
+                    check(wait_cover(True), 'cover follows output changes')
                 authenticate()
                 wait(lambda value: not value['splashShown'])
                 before = status()['animatedTransitions']

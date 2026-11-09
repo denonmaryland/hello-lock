@@ -61,7 +61,12 @@ The guest-only QML harness can deliberately release its real Wayland lock
 without authenticating. Production recovery must retain the request and
 reacquire compositor-confirmed secure state. Tests cover wrong-password
 rejection, repeated lock requests, authenticated unlocks, three injected losses,
-three DPMS cycles and two virtual-output add/remove cycles. It also disables
+three DPMS cycles and two virtual-output add/remove cycles. Hyprland's layer
+list also confirms the fail-closed `hello-lock-cover` overlay on every output
+behind the lock, immediately after each injected loss, on new outputs, and its
+removal after authenticated unlock. A Quickshell lock attempt that is refused
+silently cannot be induced in the guest; that path is covered by the mock
+service tests, which model Quickshell 0.3.2's `realizeLockTarget` behavior. It also disables
 config file watching and exercises actual Settings saves, instant authenticated
 unlock, and restoring animations with a custom time cap. Hyprland's `LOCK`
 monitor blocker independently checks protection on all active outputs. Secure

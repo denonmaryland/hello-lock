@@ -403,6 +403,109 @@ for (const phase of ['before-check', 'during-gate', 'after-unlock']) {
   c.flushDeferred();
   assert.equal(c.pendingSessionLock, false, 'a recovered lock must not be queued again');
 }
+// Issue #2 follow-up. Quickshell 0.3.2 (WlSessionLock::realizeLockTarget) ends a
+// lock attempt it cannot complete by calling unlock() while nothing is locked:
+// no lockStateChanged, no secureStateChanged, and the target reset to false.
+// Model exactly that: a write of true that silently reads back false.
+function refusingLock(c) {
+  let target = false;
+  const lock = {refuse: true, writes: [], secure: false};
+  Object.defineProperty(lock, 'locked', {
+    get() { return target },
+    set(value) { lock.writes.push(value); target = value && !lock.refuse },
+  });
+  c.sessionLock = lock;
+  return lock;
+}
+for (const start of ['first-lock', 'after-loss']) {
+  const c = lockLossContext();
+  const lock = refusingLock(c);
+  if (start === 'first-lock') {
+    c.lockRequested = false;
+    assert.equal(c.beginLock(), true);
+  } else {
+    c.lockCoverArmed = true; // It was secure once; then the lock was lost.
+    c.relockLostLock();
+  }
+  assert.equal(c.pendingSessionLock, true);
+  c.sessionLockStabilizeTimer.stop();
+  c.requestSessionLock(); // Quickshell refuses without any signal.
+  assert.equal(lock.locked, false);
+  assert.equal(c.lockRequested, true, `${start}: a refused attempt keeps the request`);
+  assert.equal(c.pendingSessionLock, true, `${start}: a refused attempt must be retried, not dropped`);
+  assert.equal(c.pendingSessionLockTimer.running, true, `${start}: the retry is scheduled`);
+  assert.equal(c.lockCoverArmed, true, `${start}: a refused attempt keeps the desktop covered`);
+  assert.equal(c.wakeProcess.running, false, `${start}: a refused attempt must not wake the desktop`);
+  lock.refuse = false;
+  lock.writes.length = 0;
+  c.sessionLockStabilizeTimer.stop();
+  c.requestSessionLock();
+  assert.equal(lock.locked, true, `${start}: the retry acquires the lock`);
+  assert.deepEqual(lock.writes.slice(-1), [true]);
+}
+{
+  // Any missed notification: the request is latched, the lock is absent and
+  // nothing is pending. The guard timer must notice it on its own.
+  const guard = source.match(/  Timer \{\n    id: lockGuardTimer\n([\s\S]*?)^  \}/m);
+  assert.ok(guard, 'a lock guard timer exists');
+  assert.match(guard[1], /running: root\.lockRequested\n/, 'the guard runs for the whole lock request');
+  assert.match(guard[1], /repeat: true/);
+  assert.match(guard[1], /onTriggered: root\.relockLostLock\(\)/);
+  const interval = Number((guard[1].match(/interval: (\d+)/) || [])[1]);
+  assert.ok(interval > 0 && interval <= 1000, 'the guard checks at least once a second');
+  const c = lockLossContext();
+  c.relockLostLock(); // What the guard does on a silent loss.
+  assert.equal(c.pendingSessionLock, true, 'a silent loss is caught by the guard');
+  c.sessionLock.locked = true;
+  c.sessionLock.secure = true;
+  c.pendingSessionLock = false;
+  c.relockLostLock();
+  assert.equal(c.pendingSessionLock, false, 'the guard leaves a held lock alone');
+}
+{
+  // The fail-closed cover: armed once the lock is secure, cleared only by an
+  // authenticated unlock, hidden for the post-authentication gate.
+  const c = lockLossContext();
+  c.startFingerprint = () => {};
+  c.sessionLock.locked = true;
+  c.sessionLock.secure = true;
+  c.emitSecureStateChanged();
+  assert.equal(c.lockCoverArmed, true, 'a secure lock arms the cover');
+  c.sessionLock.secure = false;
+  c.sessionLock.locked = false;
+  c.emitSecureStateChanged();
+  c.emitLockStateChanged();
+  c.flushDeferred();
+  assert.equal(c.lockCoverArmed, true, 'a lost lock keeps the cover armed');
+  c.sessionLock.locked = true;
+  c.finishUnlock();
+  assert.equal(c.lockCoverArmed, true, 'the cover stays armed until release');
+  c.unlockGateDone = true;
+  c.finishUnlock();
+  assert.equal(c.lockCoverArmed, false, 'an authenticated unlock disarms the cover');
+  c.emitSecureStateChanged();
+  assert.equal(c.lockCoverArmed, false, 'no request: a late secure signal cannot arm it');
+
+  const shown = source.match(/readonly property bool lockCoverShown: ([^\n]*)/);
+  assert.ok(shown, 'the cover visibility is one binding');
+  const visible = (state) => vm.runInNewContext(`(${shown[1]})`, state);
+  assert.equal(visible({lockRequested: true, lockCoverArmed: true, unlockTransition: false}), true);
+  assert.equal(visible({lockRequested: true, lockCoverArmed: false, unlockTransition: false}), false,
+    'the first lock keeps its power-down: no cover before the lock is secure');
+  assert.equal(visible({lockRequested: true, lockCoverArmed: true, unlockTransition: true}), false,
+    'PAM success reveals the splash, not the cover');
+  assert.equal(visible({lockRequested: false, lockCoverArmed: true, unlockTransition: false}), false);
+
+  const cover = source.match(/  Variants \{\n    id: lockCover\n([\s\S]*?)^  \}/m);
+  assert.ok(cover, 'the cover exists on every screen');
+  assert.match(cover[1], /model: Quickshell\.screens/);
+  assert.match(cover[1], /visible: root\.lockCoverShown/);
+  assert.match(cover[1], /WlrLayershell\.layer: WlrLayer\.Overlay/);
+  assert.match(cover[1], /WlrLayershell\.keyboardFocus: WlrKeyboardFocus\.Exclusive/);
+  assert.match(cover[1], /WlrLayershell\.namespace: "hello-lock-cover"/);
+  assert.match(cover[1], /exclusionMode: ExclusionMode\.Ignore/);
+  assert.match(cover[1], /color: "#000000"/, 'the cover is opaque');
+}
 console.log('Lock-loss recovery regressions passed (mock compositor; no real lock).');
 
 // Instant mode removes only cosmetics; failure still cannot release the lock.

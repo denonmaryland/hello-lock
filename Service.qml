@@ -50,6 +50,10 @@ Item {
   property string lastEvent: "init"
   property string lastEventAt: ""
   property bool strandedLock: false
+  // Fail closed (issue #2): armed once this lock request has been secure, or a
+  // lock attempt failed; cleared only by finishUnlock() after PAM success.
+  property bool lockCoverArmed: false
+  readonly property bool lockCoverShown: lockRequested && lockCoverArmed && !unlockTransition
   property bool strandedLockResolved: false
   // Hello Lock: true while the lock view dims before release into the splash.
   property bool unlockTransition: false
@@ -426,7 +430,19 @@ Item {
 
     pendingSessionLock = false
     pendingSessionLockTimer.stop()
+    // Quickshell skips a write equal to its last target, even one it never
+    // reached, so reset it first and make this a real attempt.
+    sessionLock.locked = false
     sessionLock.locked = true
+
+    // A lock Quickshell cannot take (WlSessionLock::realizeLockTarget) is
+    // abandoned without lockStateChanged or secureStateChanged. Nothing else
+    // would retry it, so check now: fail closed, keep covering and try again.
+    if (!sessionLock.locked && !sessionLock.secure) {
+      if (lastEvent !== "lock-failed: retrying") logEvent("lock-failed: retrying")
+      lockCoverArmed = true
+      queueSessionLock()
+    }
   }
 
   // Adapted from omacom/omarchy#14988. finishUnlock() clears the request
@@ -597,6 +613,7 @@ Item {
     unlockGate.stop()
 
     lockRequested = false
+    lockCoverArmed = false
     pendingSessionLock = false
     sessionLockStabilizeTimer.stop()
     pendingSessionLockTimer.stop()
@@ -693,6 +710,7 @@ Item {
     onSecureStateChanged: {
       root.logEvent("secure=" + secure)
       if (secure) {
+        if (root.lockRequested) root.lockCoverArmed = true
         root.pendingSessionLock = false
         sessionLockStabilizeTimer.stop()
         pendingSessionLockTimer.stop()
@@ -749,6 +767,37 @@ Item {
         onWakeRequested: root.runWake()
       }
 
+    }
+  }
+
+  // Fail closed (issue #2). From the first secure moment of a lock until an
+  // authenticated unlock, an opaque cover with the keyboard sits on every
+  // screen. While the session lock holds, the compositor shows only the lock
+  // surfaces, so the cover is unseen; if the lock is lost, this is what shows,
+  // not the desktop, until relockLostLock() wins the lock back. PAM success
+  // hides it with the unlock gate, so the splash is revealed as before.
+  Variants {
+    id: lockCover
+    model: Quickshell.screens
+
+    PanelWindow {
+      required property var modelData
+      screen: modelData
+      visible: root.lockCoverShown
+      anchors { top: true; bottom: true; left: true; right: true }
+      color: "#000000"
+      WlrLayershell.namespace: "hello-lock-cover"
+      WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+      exclusionMode: ExclusionMode.Ignore
+
+      // Swallow input: nothing typed here reaches the desktop below.
+      MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; hoverEnabled: true }
+      Item {
+        anchors.fill: parent
+        focus: true
+        Keys.onPressed: function(event) { event.accepted = true }
+      }
     }
   }
 
@@ -1121,6 +1170,16 @@ Item {
     onTriggered: root.requestSessionLock()
   }
 
+  // Backstop for a lock that ends without any notification: while a lock is
+  // requested, a missing compositor lock with no attempt pending is a loss.
+  Timer {
+    id: lockGuardTimer
+    interval: 1000
+    repeat: true
+    running: root.lockRequested
+    onTriggered: root.relockLostLock()
+  }
+
   Timer {
     id: strandedLockRetryTimer
     interval: 500
@@ -1388,6 +1447,8 @@ Item {
         pending: root.pendingSessionLock,
         sessionLocked: sessionLock.locked,
         secure: sessionLock.secure,
+        recovering: root.lockRequested && !sessionLock.secure && root.lockCoverArmed,
+        covered: root.lockCoverShown,
         realScreens: root.realScreenCount(),
         passwordPam: root.passwordPamConfigured,
         fingerprint: root.fingerprintConfigured,

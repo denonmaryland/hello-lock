@@ -66,6 +66,7 @@ ShellRoot {
         animationEnabled: test.service ? test.service.config.unlockAnimation !== false : true,
         savedName: test.service ? test.service.userConfig.name : "",
         splashShown: test.splashShown(),
+        covered: test.service ? test.service.lockCoverShown : false,
         fingerprintConfigured: test.service ? test.service.fingerprintConfigured : false})
     }
     function saveTiming(animated: bool): string {
