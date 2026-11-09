@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.5 — 2026-11-09
+
+Fixes a Medium finding from the Omarchy plugin marketplace review of 0.6.3
+(omacom/omarchy-plugin-marketplace#14051).
+
+- The Settings lock preview's lock view is now created only while the preview
+  is shown. Before, it was created at startup and kept while hidden, and its
+  password field was disabled but still writable. Qt reads clipboard offers
+  into any writable text field, even without focus, so another app's large or
+  endless clipboard offer could exhaust the shell's memory or block it.
+- A lock view's password field is read-only whenever it does not accept input
+  (both previews, and the unlock transition), not only while a password is
+  being checked.
+- `omarchy-shell lock status` adds `previewLoaded`.
+- No change to the password, fingerprint, PAM or lock-session code. The 0.6.4
+  known gaps for #2 remain; that hardening follows in a later release.
+
 ## 0.6.4 — 2026-11-09
 
 Security follow-up to #2 (lock loss treated as an unlock). Thanks to

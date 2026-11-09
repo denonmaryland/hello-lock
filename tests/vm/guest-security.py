@@ -169,6 +169,16 @@ def main():
                     # on the next lock; beginLock() also finishes it directly.
 
                 wait(lambda value: value['ready'])
+                # Marketplace #14051: no hidden lock view (and so no idle password
+                # field for clipboard offers) until the preview is shown.
+                def preview_loaded(): return json.loads(ipc('lock', 'status'))['previewLoaded']
+                check(preview_loaded() is False, 'no preview lock view exists while the preview is hidden')
+                check(ipc('lock', 'preview') == 'ok', 'settings preview opens')
+                check(until(lambda: preview_loaded() is True and 'omarchy-lock-preview' in layer_namespaces(), 5),
+                      'preview lock view is created when the preview opens')
+                check(ipc('lock', 'hidePreview') == 'ok', 'settings preview closes')
+                check(until(lambda: preview_loaded() is False and 'omarchy-lock-preview' not in layer_namespaces(), 5),
+                      'preview lock view is destroyed when the preview closes')
                 check(ipc('lock', 'lock') == 'ok', 'lock request accepted')
                 wait(lambda value: value['secure'])
                 check(compositor_locked(), 'compositor confirms real lock on all outputs')

@@ -584,6 +584,37 @@ for (const start of ['first-lock', 'after-loss']) {
   c.guardCoverKeyboard(); // No covers yet (output appearing): nothing to do.
 }
 console.log('Lock-loss recovery regressions passed (mock compositor; no real lock).');
+{
+  // Marketplace review of 0.6.3 (omarchy-plugin-marketplace#14051): Qt reads
+  // clipboard offers into any writable TextInput, focused or not, and
+  // `enabled: false` does not make one read-only.
+  const view = fs.readFileSync(path.join(rootDir, 'LockView.qml'), 'utf8');
+  const input = view.match(/          TextInput \{\n            id: passwordInput\n([\s\S]*?)\n          \}/);
+  assert.ok(input, 'the lock view has one password field');
+  const readOnly = input[1].match(/\n            readOnly: ([^\n]*)/);
+  assert.ok(readOnly, 'the password field declares readOnly');
+  const ro = (inputEnabled, authenticatingPassword) => vm.runInNewContext(`(${readOnly[1]})`, {root: {inputEnabled, authenticatingPassword}});
+  assert.equal(ro(false, false), true, 'a lock view that takes no input (preview, idle) is read-only');
+  assert.equal(ro(true, true), true, 'read-only while a password is checked');
+  assert.equal(ro(true, false), false, 'the real lock still takes typing');
+  assert.equal((view.match(/TextInput \{/g) || []).length, 1, 'no other text input in the lock view');
+
+  const preview = source.match(/  PanelWindow \{\n    id: previewWindow\n([\s\S]*?)\n  \}\n/);
+  assert.ok(preview, 'the preview window exists');
+  assert.match(preview[1], /    Loader \{\n      id: previewLockView\n      anchors\.fill: parent\n      active: root\.previewVisible\n\n      sourceComponent: LockView \{\n/,
+    'the preview lock view exists only while the preview is shown');
+  assert.equal((preview[1].match(/LockView \{/g) || []).length, 1);
+  // Every lock view in the service is the preview (on demand) or a session
+  // lock surface's (which exist only while locked).
+  const views = [...source.matchAll(/^( *)(?:sourceComponent: )?LockView \{/gm)].map(m => m.index);
+  assert.equal(views.length, 2, 'two lock views: the session lock surface and the preview');
+  const lockSurface = source.indexOf('    WlSessionLockSurface {');
+  assert.ok(lockSurface > 0 && views[0] > lockSurface && views[0] < source.indexOf('  PanelWindow {', lockSurface),
+    'the other lock view lives on the session lock surface');
+  const standalone = fs.readFileSync(path.join(rootDir, 'standalone/shell.qml'), 'utf8');
+  assert.match(standalone, /Hello\.LockView \{[\s\S]*?inputEnabled: false/, 'the standalone preview takes no input, so its field is read-only');
+}
+console.log('Preview clipboard regressions passed (no QML instantiated).');
 
 // Instant mode removes only cosmetics; failure still cannot release the lock.
 for (const brokenSplash of [false, true]) {

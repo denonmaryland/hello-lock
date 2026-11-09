@@ -705,7 +705,9 @@ Item {
             activeFocusOnPress: true
             clip: true
             enabled: root.inputEnabled && !root.authenticatingPassword
-            readOnly: root.authenticatingPassword
+            // Disabled is not read-only: Qt still reads clipboard offers into a
+            // writable TextInput. Only a field that accepts input is writable.
+            readOnly: root.authenticatingPassword || !root.inputEnabled
             echoMode: TextInput.Password
             passwordCharacter: "●"
             passwordMaskDelay: 0

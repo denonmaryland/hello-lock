@@ -880,25 +880,34 @@ Item {
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
 
-    LockView {
+    // Created only while the preview is shown. A hidden lock view would keep a
+    // password TextInput alive, and Qt reads clipboard offers into text inputs
+    // (marketplace review of 0.6.3, omarchy-plugin-marketplace#14051).
+    Loader {
+      id: previewLockView
       anchors.fill: parent
-      backgroundPath: root.wallpaperPath
-      backgroundVersion: root.backgroundVersion
-      fingerprintConfigured: root.fingerprintConfigured
-      authenticatingPassword: root.previewAuthenticating
-      failureMessage: root.previewFailures > 0 && root.previewFailureShown ? "Authentication failed (" + root.previewFailures + ")" : ""
-      failedAttempts: root.previewFailures
-      inputEnabled: false
-      logoPath: root.logoPath
-      tintLogo: root.config.tintLogo !== false
-      showClock: root.config.clock !== false
-      reducedMotion: root.previewMotion === "reduced" || (root.previewMotion !== "full" && root.reducedMotion)
-      loadBackground: root.previewVisible
-      passwordText: "x".repeat(root.previewTyped)
-      typingEffect: root.previewTypingEffect
-      capsOverride: root.previewCaps
-      snapshotSource: root.previewSnapshot
-      powerDownToken: root.previewPowerDownToken
+      active: root.previewVisible
+
+      sourceComponent: LockView {
+        anchors.fill: parent
+        backgroundPath: root.wallpaperPath
+        backgroundVersion: root.backgroundVersion
+        fingerprintConfigured: root.fingerprintConfigured
+        authenticatingPassword: root.previewAuthenticating
+        failureMessage: root.previewFailures > 0 && root.previewFailureShown ? "Authentication failed (" + root.previewFailures + ")" : ""
+        failedAttempts: root.previewFailures
+        inputEnabled: false
+        logoPath: root.logoPath
+        tintLogo: root.config.tintLogo !== false
+        showClock: root.config.clock !== false
+        reducedMotion: root.previewMotion === "reduced" || (root.previewMotion !== "full" && root.reducedMotion)
+        loadBackground: root.previewVisible
+        passwordText: "x".repeat(root.previewTyped)
+        typingEffect: root.previewTypingEffect
+        capsOverride: root.previewCaps
+        snapshotSource: root.previewSnapshot
+        powerDownToken: root.previewPowerDownToken
+      }
     }
 
     MouseArea {
@@ -1542,6 +1551,7 @@ Item {
         secure: sessionLock.secure,
         recovering: root.lockRequested && !sessionLock.secure && root.lockCoverArmed,
         covered: root.lockCoverShown,
+        previewLoaded: previewLockView.status === Loader.Ready,
         coverKeyboard: root.coverKeyboardHeld(),
         shortcutsInhibited: root.coverShortcutsInhibited(),
         realScreens: root.realScreenCount(),
