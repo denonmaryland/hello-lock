@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.6.6 — 2026-11-09
 
-Closes the two known gaps 0.6.4 left in the fix for #2 (lock loss).
+Hardens the 0.6.4 fix for #2 (lock loss) against the two gaps 0.6.4 left
+open. The remaining, narrower windows are listed under Known gaps below.
 
 - While the session lock is missing, Hyprland is put in a dedicated submap
   whose only bind is a catchall no-op. No keybinding runs and no key reaches
