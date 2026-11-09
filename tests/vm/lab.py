@@ -316,13 +316,23 @@ def source_bundle(destination, suite="visual", runtime_root=Path("/usr/share/oma
 def guest_keyboard(run, port, qmp, value, previous):
     sequence = value.get("sequence")
     # Fixed chords only: the guest picks one by name, never sends key data.
-    chords = {"bind-marker": ["meta_l", "m"], "bind-intruder": ["meta_l", "o"],
+    chords = {"bind-marker": ["meta_l", "m"], "bind-intruder": ["meta_l", "o"], "type-a": ["a"],
               "vt2": ["ctrl", "alt", "f2"], "vt1": ["ctrl", "alt", "f1"]}
-    if type(sequence) is not int or sequence < 1 or sequence > 40 or value.get("action") not in ("wrong-password", "password", *chords):
+    if type(sequence) is not int or sequence < 1 or sequence > 60 or value.get("action") not in ("wrong-password", "password", "burst", *chords):
         raise ValueError("Unexpected guest input request")
     if sequence == previous: return previous
     if sequence != previous + 1: raise ValueError("Out-of-order guest input request")
     if qmp is None: raise RuntimeError("QMP is required for guest authentication")
+    if value["action"] == "burst":
+        # About six seconds of alternating exec chords and plain keys, announced
+        # first so the guest can map an overlay in the middle of it.
+        subprocess.run(ssh_command(run, port) + ["printf '%s' '" + str(sequence) + "' > vm-input-burst"], check=True, capture_output=True, timeout=10)
+        for index in range(90):
+            keys = chords["bind-marker"] if index % 2 == 0 else chords["type-a"]
+            qmp.command("send-key", {"keys": [{"type": "qcode", "data": key} for key in keys], "hold-time": 25})
+            time.sleep(.04)
+        subprocess.run(ssh_command(run, port) + ["printf '%s' '" + str(sequence) + "' > vm-input-ack"], check=True, capture_output=True, timeout=10)
+        return sequence
     if value["action"] in chords:
         qmp.command("send-key", {"keys": [{"type": "qcode", "data": key} for key in chords[value["action"]]], "hold-time": 60})
         subprocess.run(ssh_command(run, port) + ["printf '%s' '" + str(sequence) + "' > vm-input-ack"], check=True, capture_output=True, timeout=10)

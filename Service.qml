@@ -59,6 +59,40 @@ Item {
   // must hold the keyboard so its shortcuts inhibitor stops them.
   readonly property bool lockCoverGuarding: lockCoverShown && !sessionLock.secure
   property int coverKeyboardMisses: 0
+  // Issue #2: the cover's inhibitor only works while the cover has the
+  // keyboard. For the whole time the lock is missing, Hyprland is also put in
+  // a submap whose only bind is a catchall no-op: no keybinding runs and no key
+  // reaches any client, whichever surface has focus (ignore_mods: a catchall
+  // otherwise only takes keys pressed without modifiers). VT switching is handled
+  // before keybindings, so a TTY stays reachable. It lingers until the lock has
+  // held for 5 s, so a flapping lock leaves no gap, then lifts so locked binds
+  // such as the lid switch work again; it also lifts on authenticated unlock and
+  // at startup (a crashed shell cannot leave it on).
+  property bool barrierLinger: false
+  readonly property bool compositorBarrierWanted: lockRequested && (lockCoverGuarding || barrierLinger)
+  property bool compositorBarrier: false
+  property bool barrierResync: false
+  property bool coverRuleResync: false
+  // Fixed strings: no user or config input reaches the compositor's Lua.
+  readonly property string coverRuleLua: 'hl.layer_rule({ name = "hello-lock-cover", match = { namespace = "^hello-lock-cover$" }, no_anim = true, animation = "none" })'
+  // A reload drops binds but keeps the current submap's name, so the catchall
+  // itself is checked (an expired bind object, as Omarchy's config does).
+  readonly property string barrierOnLua: coverRuleLua + '\n'
+    + 'if HELLO_LOCK_BARRIER_BIND == nil or tostring(HELLO_LOCK_BARRIER_BIND) == "HL.Keybind(expired)" then\n'
+    + '  hl.define_submap("hello-lock-barrier", function() HELLO_LOCK_BARRIER_BIND = hl.bind("catchall", function() end, { ignore_mods = true }) end)\n'
+    + 'end\n'
+    + 'hl.dispatch(hl.dsp.submap("hello-lock-barrier"))\n'
+    + 'if hl.get_current_submap() ~= "hello-lock-barrier" then error("hello-lock barrier not entered") end'
+  readonly property string barrierOffLua: 'if hl.get_current_submap() == "hello-lock-barrier" then hl.dispatch(hl.dsp.submap("reset")) end'
+  onCompositorBarrierWantedChanged: syncCompositorBarrier()
+  onLockCoverGuardingChanged: {
+    if (lockCoverGuarding) {
+      barrierLingerTimer.stop()
+      barrierLinger = true
+    } else if (barrierLinger) {
+      barrierLingerTimer.restart()
+    }
+  }
   property bool strandedLockResolved: false
   // Hello Lock: true while the lock view dims before release into the splash.
   property bool unlockTransition: false
@@ -457,15 +491,48 @@ Item {
     if (!lockRequested || pendingSessionLock || sessionLock.locked || sessionLock.secure) return
 
     logEvent("lock-lost: relocking")
+    applyCoverRule()
     queueSessionLock()
   }
 
   // Hyprland fades a new layer in from alpha 0, so a cover that maps during a
   // loss (a refused first attempt, a new output) would show the desktop through
-  // it. A named rule maps it instantly; the name makes repeats replace it, and
-  // a config reload drops it, so every lock request applies it again.
+  // it. A named rule maps it instantly; the name makes repeats replace it. A
+  // config reload drops it, so it is applied again on reload, lock request,
+  // loss, screen change and with the barrier.
   function applyCoverRule() {
-    if (!coverRuleProc.running) coverRuleProc.running = true
+    if (coverRuleProc.running) {
+      coverRuleResync = true
+      return
+    }
+    coverRuleProc.running = true
+  }
+
+  // One hyprctl at a time; a change while one runs is applied when it ends.
+  function syncCompositorBarrier() {
+    if (barrierProc.running) {
+      barrierResync = true
+      return
+    }
+    var wanted = compositorBarrierWanted
+    barrierProc.wanted = wanted
+    barrierProc.command = ["hyprctl", "eval", wanted ? barrierOnLua : barrierOffLua]
+    barrierProc.running = true
+  }
+
+  // The guard tick retries a barrier Hyprland has not confirmed (a refused or
+  // lost attempt), so it cannot stay down for the rest of a loss.
+  function ensureCompositorBarrier() {
+    if (compositorBarrierWanted && !compositorBarrier && !barrierProc.running) syncCompositorBarrier()
+  }
+
+  // A reload clears Lua rules and binds (the barrier submap's catchall too).
+  function handleCompositorReload() {
+    logEvent("compositor-reloaded")
+    // Unconfirmed until rebuilt: the guard tick retries it if this attempt fails.
+    compositorBarrier = false
+    applyCoverRule()
+    if (compositorBarrierWanted) syncCompositorBarrier()
   }
 
   function coverKeyboardHeld() {
@@ -664,6 +731,8 @@ Item {
 
     lockRequested = false
     lockCoverArmed = false
+    barrierLinger = false
+    barrierLingerTimer.stop()
     pendingSessionLock = false
     sessionLockStabilizeTimer.stop()
     pendingSessionLockTimer.stop()
@@ -1206,8 +1275,7 @@ Item {
 
   Process {
     id: coverRuleProc
-    // A fixed string: no user or config input reaches the compositor's Lua.
-    command: ["hyprctl", "eval", 'hl.layer_rule({ name = "hello-lock-cover", match = { namespace = "^hello-lock-cover$" }, no_anim = true, animation = "none" })']
+    command: ["hyprctl", "eval", root.coverRuleLua]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1215,6 +1283,47 @@ Item {
         if (reply !== "ok") root.logEvent("cover-rule: " + (reply ? "refused" : "unavailable"))
       }
     }
+    onExited: {
+      if (!root.coverRuleResync) return
+      root.coverRuleResync = false
+      // After the handler: the process may still read as running inside it.
+      Qt.callLater(root.applyCoverRule)
+    }
+  }
+
+  Process {
+    id: barrierProc
+    property bool wanted: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var reply = String(text || "").trim()
+        root.compositorBarrier = barrierProc.wanted && reply === "ok"
+        // Hyprland's own error text (no user input), cut short for the log.
+        if (reply !== "ok") root.logEvent("barrier: " + (barrierProc.wanted ? "on" : "off") + " " + (reply ? "refused: " + reply.replace(/\s+/g, " ").slice(0, 160) : "unavailable"))
+        else if (barrierProc.wanted) root.logEvent("barrier: on")
+      }
+    }
+    onExited: {
+      if (!root.barrierResync) return
+      root.barrierResync = false
+      // After the handler: the process may still read as running inside it.
+      Qt.callLater(root.syncCompositorBarrier)
+    }
+  }
+
+  // Hyprland's own events, loaded by file so a Quickshell without its Hyprland
+  // module still runs the lock service.
+  Loader {
+    id: hyprlandEvents
+    source: Qt.resolvedUrl("platform/HyprlandEvents.qml")
+    onStatusChanged: if (status === Loader.Error) root.logEvent("hyprland-events: unavailable")
+  }
+
+  Connections {
+    target: hyprlandEvents.item
+    ignoreUnknownSignals: true
+    function onConfigReloaded() { root.handleCompositorReload() }
   }
 
   Process {
@@ -1263,6 +1372,13 @@ Item {
 
   // Backstop for a lock that ends without any notification: while a lock is
   // requested, a missing compositor lock with no attempt pending is a loss.
+  // Lifts the barrier once the lock has held this long without another loss.
+  Timer {
+    id: barrierLingerTimer
+    interval: 5000
+    onTriggered: root.barrierLinger = false
+  }
+
   // While the lock is missing, keep the cover's keyboard (and with it the
   // shortcuts inhibitor) on the cover.
   Timer {
@@ -1278,7 +1394,10 @@ Item {
     interval: 1000
     repeat: true
     running: root.lockRequested
-    onTriggered: root.relockLostLock()
+    onTriggered: {
+      root.relockLostLock()
+      root.ensureCompositorBarrier()
+    }
   }
 
   Timer {
@@ -1303,6 +1422,7 @@ Item {
   Connections {
     target: Quickshell
     function onScreensChanged() {
+      root.applyCoverRule()
       root.requestSessionLock()
 
       // A monitor still coming up has no workspace, so cannot answer yet.
@@ -1522,6 +1642,8 @@ Item {
 
   Component.onCompleted: {
     applyCoverRule()
+    // A shell that crashed during a loss may have left the barrier on.
+    syncCompositorBarrier()
     refreshBackground()
     statusStartTimer.start()
     onboardingStartTimer.start()
@@ -1554,6 +1676,7 @@ Item {
         previewLoaded: previewLockView.status === Loader.Ready,
         coverKeyboard: root.coverKeyboardHeld(),
         shortcutsInhibited: root.coverShortcutsInhibited(),
+        barrier: root.compositorBarrier,
         realScreens: root.realScreenCount(),
         passwordPam: root.passwordPamConfigured,
         fingerprint: root.fingerprintConfigured,

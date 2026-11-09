@@ -20,6 +20,7 @@ ShellRoot {
   property bool holding: false
   property int holdDrops: 0
   property int reclaims: 0
+  property var events: []
 
   Loader {
     id: loader
@@ -55,7 +56,11 @@ ShellRoot {
   Connections {
     target: test.service
     function onUnlockTransitionChanged() { if (test.service.unlockTransition) test.animatedTransitions += 1 }
-    function onLastEventChanged() { if (test.service.lastEvent === "cover-keyboard: reclaiming") test.reclaims += 1 }
+    function onLastEventChanged() {
+      if (test.service.lastEvent === "cover-keyboard: reclaiming") test.reclaims += 1
+      // Service event names only (no input); kept for a failure report.
+      test.events = test.events.concat([test.service.lastEvent]).slice(-300)
+    }
   }
   function splashShown() {
     if (!test.service) return false
@@ -82,6 +87,7 @@ ShellRoot {
         coverKeyboard: test.service ? test.service.coverKeyboardHeld() : false,
         shortcutsInhibited: test.service ? test.service.coverShortcutsInhibited() : false,
         holding: test.holding, holdDrops: test.holdDrops, reclaims: test.reclaims,
+        barrier: test.service ? test.service.compositorBarrier : false,
         fingerprintConfigured: test.service ? test.service.fingerprintConfigured : false})
     }
     function saveTiming(animated: bool): string {
@@ -130,6 +136,7 @@ ShellRoot {
       test.service.enteredPassword = ""
       return "cleared"
     }
+    function events(): string { return JSON.stringify(test.events) }
     function quit(): string { Qt.quit(); return "ok" }
   }
   Timer { interval: 400000; running: true; onTriggered: Qt.quit() }

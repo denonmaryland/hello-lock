@@ -71,6 +71,7 @@ def main():
 
                 def wait(predicate, seconds=10):
                     deadline = time.monotonic() + seconds
+                    value = None
                     while time.monotonic() < deadline:
                         if process.poll() is not None: raise RuntimeError('Guest service exited')
                         try:
@@ -78,7 +79,13 @@ def main():
                             if predicate(value): return value
                         except (RuntimeError, ValueError): pass
                         time.sleep(.08)
-                    raise RuntimeError('Guest state timeout')
+                    # Booleans only: names which flags were off, never any input.
+                    off = sorted(key for key, flag in (value or {}).items() if flag is False)
+                    try:
+                        # The service's own event names (lock/secure/barrier states), never input.
+                        result['service_events'] = [event for event in json.loads(ipc('qa', 'events')) if not event.startswith(('session-locked=', 'secure=', 'lock-lost', 'lock-pending'))][-60:]
+                    except (RuntimeError, ValueError, subprocess.SubprocessError): pass
+                    raise RuntimeError('Guest state timeout (false: ' + ', '.join(off) + ')')
 
                 def check(condition, name):
                     if not condition: raise RuntimeError('Failed: ' + name)
@@ -146,18 +153,22 @@ def main():
                         time.sleep(step)
                     return False
 
-                def keyboard(action):
+                def await_ack(number):
+                    deadline = time.monotonic() + 30
+                    while time.monotonic() < deadline:
+                        ack = home / 'vm-input-ack'
+                        if ack.exists() and ack.read_text() == str(number): return
+                        time.sleep(.1)
+                    raise RuntimeError('QMP input timeout')
+
+                def keyboard(action, wait=True):
                     nonlocal sequence
                     sequence += 1
                     temporary = home / 'vm-input.partial'
                     temporary.write_text(json.dumps({'sequence': sequence, 'action': action}))
                     temporary.replace(home / 'vm-input.json')
-                    deadline = time.monotonic() + 30
-                    while time.monotonic() < deadline:
-                        ack = home / 'vm-input-ack'
-                        if ack.exists() and ack.read_text() == str(sequence): return
-                        time.sleep(.1)
-                    raise RuntimeError('QMP input timeout')
+                    if wait: await_ack(sequence)
+                    return sequence
 
                 def authenticate():
                     keyboard('password')
@@ -203,10 +214,13 @@ def main():
                     check(recovered['requested'] and compositor_locked(), 'lost lock reacquired without authentication')
                     authenticate()
 
-                # Issue #2 review (T29): hold recovery open and prove that, with
-                # compositor animations on, the desktop stays covered and inert.
+                # Issue #2 reviews (T29, T32): hold recovery open and prove that,
+                # with compositor animations on, the desktop stays covered and
+                # inert for the whole time: no binding runs and no key reaches
+                # any client, including a second exclusive overlay as it maps.
                 marker, started = home / 'qa-bind-marker', home / 'qa-intruder-started'
-                for path in (marker, started): path.unlink(missing_ok=True)
+                intruder_log = home / 'qa-intruder.log'
+                for path in (marker, started, intruder_log): path.unlink(missing_ok=True)
                 intruder_dir = home / 'qa-intruder'
                 intruder_dir.mkdir(exist_ok=True)
                 (intruder_dir / 'shell.qml').write_text('''import QtQuick
@@ -221,19 +235,66 @@ ShellRoot {
     WlrLayershell.namespace: "qa-intruder"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    Item {
+      anchors.fill: parent
+      focus: true
+      Keys.onPressed: function(event) { console.warn("QA-INTRUDER-KEY " + event.key) }
+    }
   }
 }
 ''')
+
+                def submap():
+                    return subprocess.run(['hyprctl', 'submap'], capture_output=True, text=True, timeout=5).stdout.strip()
+
+                def start_intruder():
+                    log = intruder_log.open('a')
+                    return subprocess.Popen(['qs', '-p', str(intruder_dir), '--no-color'], stdout=log, stderr=subprocess.STDOUT)
+
+                def stop(child):
+                    child.terminate()
+                    try: child.wait(timeout=5)
+                    except subprocess.TimeoutExpired: child.kill(); child.wait()
+
+                def barrier_binds():
+                    binds = json.loads(subprocess.run(['hyprctl', '-j', 'binds'], capture_output=True, text=True,
+                                                      check=True, timeout=5).stdout)
+                    return [bind for bind in binds if bind.get('submap') == 'hello-lock-barrier']
+
+                def barrier_live():
+                    found = barrier_binds()
+                    return submap() == 'hello-lock-barrier' and len(found) == 1 and found[0].get('catch_all') is True
+
+                def intruder_keys():
+                    return intruder_log.read_text().count('QA-INTRUDER-KEY') if intruder_log.exists() else 0
+
+                def opaque_new_output(name, label):
+                    subprocess.run(['hyprctl', 'output', 'create', 'headless', name], capture_output=True, check=True, timeout=5)
+                    try:
+                        check(until(lambda: 'hello-lock-cover' in layer_namespaces(name), 5), label + ': new output gets a cover')
+                        shot = frame(name)  # Taken as soon as it maps: a fade-in would still show magenta.
+                        result.setdefault('new_output_frames', {})[label] = shot
+                        check(shot['magenta'] == 0 and shot['black'] >= .99, label + ': new output cover is opaque from its first frame')
+                    finally:
+                        subprocess.run(['hyprctl', 'output', 'remove', name], capture_output=True, timeout=5)
+
                 ipc('lock', 'lock')
                 wait(lambda value: value['secure'])
+                check(submap() == 'default', 'no barrier while the real lock holds (locked binds keep working)')
+                # A config reload drops Lua rules: the next cover must still map opaque.
+                subprocess.run(['hyprctl', 'reload'], capture_output=True, check=True, timeout=10)
+                time.sleep(1)
+                wait(lambda value: value['secure'] and value['requested'], 10)
                 check(ipc('qa', 'hold') == 'holding', 'recovery held open by guest-only fault injection')
                 held = wait(lambda value: value['holding'] and value['requested'] and not value['secure']
-                            and value['covered'] and value['coverKeyboard'] and value['shortcutsInhibited'], 10)
-                check(held['holdDrops'] >= 1, 'held recovery keeps the cover, keyboard and shortcut inhibitor')
+                            and value['covered'] and value['coverKeyboard'] and value['shortcutsInhibited'] and value['barrier'], 10)
+                check(held['holdDrops'] >= 1, 'held recovery keeps the cover, keyboard, inhibitor and barrier')
                 check(until(lambda: not compositor_locked(), 3), 'held recovery leaves the compositor unlocked')
+                check(until(barrier_live, 3), 'Hyprland is in the barrier submap, one catchall bind, during recovery')
                 shot = frame()
                 result['held_frame'] = shot
                 check(shot['magenta'] == 0 and shot['black'] >= .99, 'held recovery shows the opaque cover, not the desktop')
+                opaque_new_output('LOCK-HOLD', 'after reload before loss')
                 keyboard('bind-marker')
                 time.sleep(1.2)
                 check(not marker.exists(), 'exec keybinding stays inert while the lock is missing')
@@ -241,28 +302,32 @@ ShellRoot {
                 time.sleep(1.5)
                 check(not started.exists() and 'qa-intruder' not in layer_namespaces(),
                       'overlay keybinding stays inert while the lock is missing')
+                # Chords and plain keys from before a second exclusive overlay maps
+                # until well after the cover has taken the keyboard back.
+                burst = keyboard('burst', wait=False)
+                check(until(lambda: (home / 'vm-input-burst').exists() and (home / 'vm-input-burst').read_text() == str(burst), 15, .02),
+                      'input burst started')
                 before = status()['reclaims']
-                intruder = subprocess.Popen(['qs', '-p', str(intruder_dir), '--no-color'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                intruder = start_intruder()
                 try:
-                    check(until(lambda: 'qa-intruder' in layer_namespaces(), 10), 'second exclusive overlay maps during recovery')
-                    reclaimed = wait(lambda value: value['reclaims'] > before and value['coverKeyboard']
-                                     and value['shortcutsInhibited'] and value['holding'], 5)
+                    check(until(lambda: 'qa-intruder' in layer_namespaces(), 10, .02), 'second exclusive overlay maps during the burst')
+                    reclaimed = wait(lambda value: value['reclaims'] > before and value['coverKeyboard'] and value['holding'], 5)
                     check(not reclaimed['secure'], 'cover takes the keyboard back from a second exclusive overlay')
-                    keyboard('bind-marker')
-                    time.sleep(1.2)
-                    check(not marker.exists(), 'exec keybinding stays inert after a second exclusive overlay')
+                    await_ack(burst)
+                    time.sleep(.5)
+                    check(not marker.exists(), 'no exec keybinding ran from overlay mapping through reclaim')
+                    result['burst_intruder_keys'] = intruder_keys()
+                    check(intruder_keys() == 0, 'no key reached the second overlay from mapping through reclaim')
                 finally:
-                    intruder.terminate()
-                    try: intruder.wait(timeout=5)
-                    except subprocess.TimeoutExpired: intruder.kill(); intruder.wait()
-                subprocess.run(['hyprctl', 'output', 'create', 'headless', 'LOCK-HOLD'], capture_output=True, check=True, timeout=5)
-                try:
-                    check(until(lambda: 'hello-lock-cover' in layer_namespaces('LOCK-HOLD'), 5), 'new output during recovery gets a cover')
-                    shot = frame('LOCK-HOLD')  # Taken as soon as it maps: a fade-in would still show magenta.
-                    result['new_output_frame'] = shot
-                    check(shot['magenta'] == 0 and shot['black'] >= .99, 'new output cover maps instantly opaque with animations on')
-                finally:
-                    subprocess.run(['hyprctl', 'output', 'remove', 'LOCK-HOLD'], capture_output=True, timeout=5)
+                    stop(intruder)
+                # A reload during the loss clears the barrier's bind and the rule.
+                subprocess.run(['hyprctl', 'reload'], capture_output=True, check=True, timeout=10)
+                check(until(barrier_live, 5), 'reload during recovery rebuilds the barrier catchall')
+                wait(lambda value: value['barrier'] and value['holding'] and value['covered'], 10)
+                opaque_new_output('LOCK-RELOAD', 'reload during loss')
+                keyboard('bind-marker')
+                time.sleep(1.2)
+                check(not marker.exists(), 'exec keybinding stays inert after a reload during recovery')
                 keyboard('vt2')
                 check(until(lambda: console() == '2', 5, .2), 'TTY switch still works during recovery (escape route)')
                 keyboard('vt1')
@@ -272,8 +337,24 @@ ShellRoot {
                 check(ipc('qa', 'release') == 'released', 'held recovery released')
                 wait(lambda value: value['secure'] and value['requested'], 10)
                 check(compositor_locked(), 'released recovery relocks without authentication')
+                check(submap() == 'hello-lock-barrier', 'the barrier lingers right after the relock (a flapping lock leaves no gap)')
+                wait(lambda value: value['secure'] and not value['barrier'], 12)
+                check(until(lambda: submap() == 'default', 3), 'the barrier lifts once the real lock has held')
                 check(ipc('qa', 'clearEntry') == 'cleared', 'lock entry cleared before authenticating')
                 authenticate()
+                check(submap() == 'default', 'no barrier after authenticated unlock')
+                # The probes are live: unlocked, the binding runs and keys arrive.
+                intruder = start_intruder()
+                try:
+                    check(until(lambda: 'qa-intruder' in layer_namespaces(), 10), 'control overlay maps on the unlocked desktop')
+                    time.sleep(.5)
+                    keyboard('type-a')
+                    check(until(lambda: intruder_keys() > 0, 3), 'control: keys reach an overlay when unlocked')
+                finally:
+                    stop(intruder)
+                keyboard('bind-marker')
+                check(until(marker.exists, 3), 'control: the exec keybinding runs when unlocked')
+                marker.unlink(missing_ok=True)
 
                 ipc('lock', 'lock')
                 wait(lambda value: value['secure'])
@@ -323,6 +404,19 @@ ShellRoot {
                 result['recovery_ms'] = status()['recoveryMs']
                 result['loss_events'] = status()['lossEvents']
                 check(len(result['recovery_ms']) >= 3, 'all injected losses produced measured secure recovery')
+                # A shell that dies during a loss must not strand the barrier: the
+                # next start of the service resets it.
+                ipc('lock', 'lock')
+                wait(lambda value: value['secure'])
+                check(ipc('qa', 'hold') == 'holding', 'final hold for the crash check')
+                wait(lambda value: value['barrier'] and value['holding'], 10)
+                check(until(lambda: not compositor_locked(), 3) and until(barrier_live, 3), 'barrier on before the crash')
+                process.kill()
+                process.wait()
+                check(submap() == 'hello-lock-barrier', 'a killed service leaves the barrier behind')
+                process = subprocess.Popen(['qs', '-p', str(stage), '--no-color'], env=env, stdout=log, stderr=subprocess.STDOUT)
+                wait(lambda value: value['ready'], 20)
+                check(until(lambda: submap() == 'default', 5), 'a restarted service resets the barrier')
                 result['pam_policy'] = 'Arch guest system-auth under omarchy-lock-password'
                 result['status'] = 'passed'
                 ipc('qa', 'quit')
