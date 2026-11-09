@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+Closes the two known gaps 0.6.4 left in the fix for #2 (lock loss).
+
+- While the session lock is missing, Hyprland is put in a dedicated submap
+  whose only bind is a catchall no-op. No keybinding runs and no key reaches
+  any app, whatever has focus, including an overlay that maps during the loss.
+  The 0.6.4 cover inhibited shortcuts only while it had the keyboard. VT
+  switching (Ctrl+Alt+F-keys) is handled by Hyprland before keybindings, so a
+  console stays reachable. The barrier stays up until the lock has held for
+  5 s, so a lock that drops and returns repeatedly leaves no gap. Then it lifts,
+  so locked binds such as the lid switch and media keys work on the lock screen
+  again. It also lifts on authenticated unlock and when the shell starts, so a
+  crashed shell cannot leave it on. If Hyprland does not confirm it, the
+  one-second lock guard tries again. To clear it by hand from a console:
+  `hyprctl dispatch 'hl.dsp.submap("reset")'`.
+- The no-fade rule for the cover is applied again after a Hyprland config
+  reload, on each lock loss and on screen changes, as well as at startup and on
+  each lock request. Before, a reload during a lock could make a newly mapped
+  cover fade in.
+- `omarchy-shell lock status` adds `barrier`.
+- No change to the password, fingerprint or PAM code.
+
 ## 0.6.5 — 2026-11-09
 
 Fixes a Medium finding from the Omarchy plugin marketplace review of 0.6.3
