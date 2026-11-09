@@ -14,8 +14,16 @@ Fixes a Medium finding from the Omarchy plugin marketplace review of 0.6.3
   (both previews, and the unlock transition), not only while a password is
   being checked.
 - `omarchy-shell lock status` adds `previewLoaded`.
-- No change to the password, fingerprint, PAM or lock-session code. The 0.6.4
-  known gaps for #2 remain; that hardening follows in a later release.
+- No change to the password, fingerprint, PAM or lock-session code.
+
+### Still open from 0.6.4 (#2)
+
+The 0.6.4 known gaps remain. One is larger than 0.6.4's notes say: in VM
+testing, the cover sometimes took more than 5 s, not 0.2–0.3 s, to take the
+keyboard back from another overlay with exclusive keyboard focus. That may be
+test-VM slowness, but treat the gap as open-ended until it is replaced. 0.6.6
+is planned to replace this keyboard reclaim with a continuous compositor
+barrier.
 
 ## 0.6.4 — 2026-11-09
 
