@@ -794,6 +794,14 @@ for (const start of ['first-lock', 'after-loss']) {
     'a new cover asks for a fresh rule run and waits for it');
   assert.match(cover, /interval: 300\n        running: root\.lockCoverShown && !coverWindow\.visible && !coverWindow\.ruleReady\n/);
 }
+{
+  // T54 (P3): QML int is 32-bit and would wrap after 2^31 launches, flipping
+  // the launch-order checks. The counters are real (exact to 2^53).
+  for (const name of ['coverRuleLaunches', 'coverRuleEpoch', 'coverRuleMinLaunch', 'ruleLaunchNeeded', 'launch']) {
+    assert.match(source, new RegExp(`property real ${name}: 0\n`), `${name} cannot wrap`);
+    assert.doesNotMatch(source, new RegExp(`property int ${name}:`));
+  }
+}
 console.log('Lock-loss recovery regressions passed (mock compositor; no real lock).');
 {
   // Marketplace review of 0.6.3 (omarchy-plugin-marketplace#14051): Qt reads

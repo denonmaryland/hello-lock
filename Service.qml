@@ -81,12 +81,13 @@ Item {
   // and coverRuleEpoch is the last one Hyprland answered "ok". A reload drops
   // the rule, so coverRuleValid is false until a run after it succeeds. A cover
   // that is not mapped yet waits for a run that started after it was created.
-  property int coverRuleLaunches: 0
-  property int coverRuleEpoch: 0
+  // real, not int: exact far past any launch count, so the order checks below never wrap.
+  property real coverRuleLaunches: 0
+  property real coverRuleEpoch: 0
   property bool coverRuleValid: false
   // The first launch a reply may count from: a run that started before the
   // last reload may answer "ok" after it, for a rule the reload has erased.
-  property int coverRuleMinLaunch: 0
+  property real coverRuleMinLaunch: 0
   // Fixed strings: no user or config input reaches the compositor's Lua.
   readonly property string coverRuleLua: 'hl.layer_rule({ name = "hello-lock-cover", match = { namespace = "^hello-lock-cover$" }, no_anim = true, animation = "none" })'
   // A reload drops binds but keeps the current submap's name, so the catchall
@@ -934,7 +935,7 @@ Item {
       // cover maps anyway after 300 ms and may fade in: a cover that fades in
       // still beats one that never maps, which would leave the desktop exposed.
       // A mapped cover stays mapped.
-      property int ruleLaunchNeeded: 0
+      property real ruleLaunchNeeded: 0
       property bool ruleWaitExpired: false
       property bool shownLatched: false
       readonly property bool ruleReady: root.coverRuleValid && root.coverRuleEpoch >= ruleLaunchNeeded
@@ -1322,7 +1323,7 @@ Item {
 
   Process {
     id: coverRuleProc
-    property int launch: 0
+    property real launch: 0
     command: ["hyprctl", "eval", root.coverRuleLua]
     stdout: StdioCollector {
       waitForEnd: true
