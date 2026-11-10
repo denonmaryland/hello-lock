@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.7 — 2026-11-10
+
+Fixes a finding from the Omarchy plugin marketplace review of 0.6.6
+(omacom/omarchy-plugin-marketplace#14051).
+
+- The weather reply from wttr.in is now capped at 4096 bytes (a real reply is
+  about 30). Before, `bin/hello-status` read the whole reply into memory and
+  only then checked it, so a huge reply, from wttr.in or from anything
+  answering in its place, cost that much memory. The request had time limits
+  but no size limit. Weather is on by default.
+- The cap is enforced twice. `curl` gets `--max-filesize`, and the helper
+  reads `curl`'s output as it arrives and kills it at the first byte past the
+  cap, whatever `curl` does. It never holds more than 4097 bytes of the reply.
+- Both requests go through the same capped read: the one for the greeting
+  (1 s) and the detached background retry (8 s).
+- A reply over the cap counts as no weather. It is not shown and not cached.
+  Before, a short reply followed by any amount of whitespace was accepted.
+- `curl`'s error output is discarded instead of captured.
+- No change to the password, fingerprint, PAM or lock-session code. Only
+  `bin/hello-status` and its tests changed.
+
 ## 0.6.6 — 2026-11-09
 
 Hardens the 0.6.4 fix for #2 (lock loss) against the two gaps 0.6.4 left

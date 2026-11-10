@@ -10,7 +10,8 @@ Sources (all read-only):
   battery   /sys/class/power_supply/BAT*/{capacity,status} (+ AC*/online)
   weather   wttr.in, the same service the bar's omarchy.weather widget uses.
             The widget keeps no on-disk cache, so this helper caches in
-            ~/.cache/hello-lock/weather.json (fresh for 30 min). Location
+            ~/.cache/hello-lock/weather.json (fresh for 30 min). The reply
+            is capped at WEATHER_MAX_BYTES; a longer one is no weather. Location
             comes from ~/.local/state/omarchy/settings/weather.json (else IP
             auto-detect); unit from the omarchy.weather entry "unit" in
             ~/.config/omarchy/shell.json, else locale (en_US -> imperial).
@@ -29,6 +30,7 @@ import datetime
 import glob
 import json
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -50,6 +52,9 @@ FRESH_S = 30 * 60
 STALE_MAX_S = 12 * 3600
 SYNC_TIMEOUT = 1.0
 BG_TIMEOUT = 8.0
+# A real reply is about 30 bytes ("+72°F|Partly cloudy"). Anything longer than
+# this is not weather: the fetch stops there and the rest is never read.
+WEATHER_MAX_BYTES = 4096
 
 
 def read(path):
@@ -134,19 +139,67 @@ def weather_query():
     return ""
 
 
+def run_bounded(argv, limit, timeout):
+    """Run argv and return (returncode, stdout bytes), or None.
+
+    None means the program wrote more than `limit` bytes, was still running at
+    `timeout` seconds, or could not be started. Output is read as it arrives
+    and the program is killed at the first byte past the limit, so this never
+    holds more than limit + 1 bytes of it. stderr is discarded.
+    """
+    try:
+        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
+    deadline = time.monotonic() + timeout
+    data = b""
+    try:
+        fd = p.stdout.fileno()
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                return None
+            chunk = os.read(fd, limit + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+            if len(data) > limit:
+                return None
+        return p.wait(max(0.0, deadline - time.monotonic())), data
+    except Exception:
+        return None
+    finally:
+        if p.poll() is None:
+            try:
+                p.kill()
+                p.wait(1)
+            except Exception:
+                pass
+        try:
+            p.stdout.close()
+        except Exception:
+            pass
+
+
 def fetch_weather(query, unit, timeout):
     url = "%s/%s?format=%%t|%%C&%s" % (WEATHER_URL.rstrip("/"), query,
                                        "u" if unit == "imperial" else "m")
-    try:
-        r = subprocess.run(
-            ["curl", "-fsS", "--max-time", str(timeout), "--connect-timeout",
-             str(timeout), url],
-            capture_output=True, text=True, timeout=timeout + 0.3,
-            stdin=subprocess.DEVNULL)
-    except Exception:
+    # The reply is remote data: bound it before reading it. curl refuses a
+    # body past the limit (by Content-Length, or mid-transfer on curl 8.4+),
+    # and run_bounded stops reading at the limit whatever curl does. Both the
+    # greeting and the detached refresh fetch through here.
+    r = run_bounded(
+        ["curl", "-fsS", "--max-time", str(timeout), "--connect-timeout",
+         str(timeout), "--max-filesize", str(WEATHER_MAX_BYTES), url],
+        WEATHER_MAX_BYTES, timeout + 0.3)
+    if r is None or r[0] != 0:
         return None
-    out = (r.stdout or "").strip()
-    if r.returncode != 0 or "|" not in out or "°" not in out or "<" in out:
+    try:
+        out = r[1].decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if "|" not in out or "°" not in out or "<" in out:
         return None
     t, c = out.split("|", 1)
     t, c = t.strip().lstrip("+"), " ".join(c.split())
