@@ -34,11 +34,36 @@ wherever else a review of every helper in `bin/` found it.
   check that folder's owner and mode.
 - Typing-effect names the doctor reports are limited to lowercase letters,
   digits and dashes, as the standalone lock already does.
+- The typing-effect harness (`typing/harness/run.sh`, a development tool that
+  is not part of the lock) made `/tmp/hl` without checking who owned it, then
+  opened its lock and its log there with redirects that empty the file first.
+  Another user could make `/tmp/hl` first and point those names at a file of
+  yours, and the next run would empty it. Now each run records into a new
+  private folder from `mktemp -d` and prints its path. Ctrl+C now stops a run
+  at once (before, the effect window ran on for up to 25 s), stops the effect
+  window and the screen recorder, and removes that folder. A recorder that
+  doesn't stop when asked is killed after 5 s instead of waited on forever. The lock that keeps to
+  one run at a time is in your own `$XDG_RUNTIME_DIR` and is opened without
+  emptying it; the harness won't start if that folder is missing or other
+  users can read or write it. Effect names are limited to lowercase letters,
+  digits and dashes.
 - The other helpers in `bin/` were checked for the same three things (trusting
   a shared folder, building shell text, printing names as they are) and needed
-  no change.
+  no change. So were the installer and uninstaller, the standalone lock, the
+  typing harness, the sound generators, the tests and the VM lab, for any
+  fixed name in `/tmp`, `/var/tmp` or `/dev/shm`. They all use folders and
+  files made fresh with `mkstemp`/`mkdtemp`, or the user's private runtime
+  folder. The one exception left is the CachyOS installer log in the VM lab:
+  it runs as root in a disposable guest, and is opened without following a
+  symlink and checked to be root's own regular file.
+- The sound READMEs' preview commands wrote to fixed names in `/tmp`; they now
+  write into a folder from `mktemp -d`.
+- A test now fails if any script, QML file, test or document names a path in
+  `/tmp`, `/var/tmp` or `/dev/shm` without being on a reviewed list that says
+  why it is safe.
 - No change to the password, fingerprint, PAM or lock-session code. Only
-  `bin/hello-lock-doctor`, `bin/hello-status` and tests changed.
+  `bin/hello-lock-doctor`, `bin/hello-status`, the typing harness, docs and
+  tests changed.
 
 ## 0.6.7 — 2026-11-10
 

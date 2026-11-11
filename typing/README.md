@@ -64,4 +64,7 @@ sweep). Staggers stay under ~50 ms per item. Overshoot comes from a spring
 `typing/harness/run.sh <name> [logo]` opens a small overlay window on the
 screen for a few seconds with the effect on a real logo, scripts keystrokes
 (type 12, backspace 3, retype, submit, fail, type 5, clear), and records it to
-`/tmp/hl/fx-<name>.mp4` plus a contact sheet `/tmp/hl/fx-<name>-sheet.png`.
+`fx-<name>-crop.mp4` plus a contact sheet `fx-<name>-sheet.png` in a new
+private folder (`mktemp -d`, under `$TMPDIR`), whose path it prints. One run
+at a time: the lock is in your own `$XDG_RUNTIME_DIR`, and the harness refuses
+to start if that folder is missing or other users can read or write it.

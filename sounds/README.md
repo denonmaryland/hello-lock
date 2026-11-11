@@ -28,8 +28,9 @@ Regenerate the 18 typing WAVs with Python's standard library:
 
 ```sh
 python3 sounds/generate-typing.py
-python3 sounds/generate-typing.py --demo /tmp/hello-lock-typing-preview.wav
-pw-play /tmp/hello-lock-typing-preview.wav
+preview=$(mktemp -d)   # a new private folder, never a fixed shared name
+python3 sounds/generate-typing.py --demo "$preview/typing-preview.wav"
+pw-play "$preview/typing-preview.wav"
 ```
 
 The demo plays a pretend eight-edit phrase for each patch in the table's order,
@@ -65,8 +66,9 @@ pack. Wrong-password and short cues sit slightly lower.
 ```sh
 python3 sounds/generate-cues.py
 python3 sounds/generate-cues.py --only unlock-coin error   # balanced to the files on disk
-python3 sounds/generate-cues.py --demo /tmp/hello-lock-cues-preview.wav
-pw-play /tmp/hello-lock-cues-preview.wav
+preview=$(mktemp -d)
+python3 sounds/generate-cues.py --demo "$preview/cues-preview.wav"
+pw-play "$preview/cues-preview.wav"
 ```
 
 Settings → Sound draws each cue's waveform from peaks precomputed from these
