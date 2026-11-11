@@ -36,33 +36,60 @@ MARKER = "hello-lock-clipboard-marker"
 SHELL = r'''import QtQuick
 import Quickshell
 import "plugin/platform"
+import "plugin/settings"
 import "plugin/platform/SafeTyping.js" as SafeTyping
 
+// Only the current phase's items exist: a hidden writable field still reads
+// the clipboard, so a probe left in another phase would spoil it.
 ShellRoot {
   id: root
   readonly property string phase: Quickshell.env("HL_CLIP_PHASE")
   readonly property string source: Quickshell.env("HELLO_LOCK_SOURCE")
   readonly property string configDir: Quickshell.env("XDG_CONFIG_HOME") + "/hello-lock"
+  readonly property var probes: ({ control: plainProbe, empty: emptyProbe, readonly: readonlyProbe,
+                                   inputfield: fieldProbe, paste: pasteProbe })
 
-  FloatingWindow {
-    visible: root.phase === "control" || root.phase === "paste"
-    implicitWidth: 420; implicitHeight: 120
-    color: "#202020"
-    TextInput {
-      id: plain
-      visible: root.phase === "control"
-      anchors.fill: parent; color: "white"; font.pixelSize: 20
-      Component.onCompleted: if (root.phase === "control") forceActiveFocus()
+  Loader {
+    active: root.probes[root.phase] !== undefined
+    sourceComponent: FloatingWindow {
+      visible: true
+      implicitWidth: 420; implicitHeight: 120
+      color: "#202020"
+      Loader {
+        anchors.fill: parent
+        sourceComponent: root.probes[root.phase]
+        onLoaded: { item.forceActiveFocus(); console.log("READY:" + root.phase) }
+      }
     }
+  }
+
+  // A writable field: Qt must read the offer, or this check can't see reads.
+  Component { id: plainProbe
+    TextInput { color: "white"; font.pixelSize: 20 } }
+  // Negative controls.
+  Component { id: emptyProbe
+    Item { focus: true } }
+  Component { id: readonlyProbe
+    TextInput { color: "white"; font.pixelSize: 20; readOnly: true } }
+  Component { id: fieldProbe
+    InputField { width: 300; maximumLength: 40 } }
+  // A SafeTyping field, Ctrl+V, then what it holds.
+  Component { id: pasteProbe
     TextInput {
       id: safe
-      visible: root.phase === "paste"
-      anchors.fill: parent; color: "white"; font.pixelSize: 20
+      color: "white"; font.pixelSize: 20
       readOnly: true; cursorVisible: activeFocus; maximumLength: 40
       Keys.onPressed: (event) => SafeTyping.key(safe, event, paste)
-      Component.onCompleted: if (root.phase === "paste") forceActiveFocus()
+      SafePaste { id: paste }
+      Timer {
+        running: true; interval: 2500
+        onTriggered: {
+          SafeTyping.key(safe, { key: Qt.Key_V, text: "\u0016", modifiers: Qt.ControlModifier, accepted: false }, paste)
+          report.start()
+        }
+      }
+      Timer { id: report; interval: 2500; onTriggered: console.log("FIELD:" + JSON.stringify(safe.text)) }
     }
-    SafePaste { id: paste }
   }
 
   Loader {
@@ -85,17 +112,6 @@ ShellRoot {
     }
     onStatusChanged: if (status === Loader.Error) console.log("READY:error")
   }
-  Component.onCompleted: if (phase === "control" || phase === "paste") console.log("READY:" + phase)
-
-  // paste: Ctrl+V as SafeTyping gets it from the keyboard, then report.
-  Timer {
-    running: root.phase === "paste"; interval: 2500
-    onTriggered: {
-      SafeTyping.key(safe, { key: Qt.Key_V, text: "\u0016", modifiers: Qt.ControlModifier, accepted: false }, paste)
-      report.start()
-    }
-  }
-  Timer { id: report; interval: 2500; onTriggered: console.log("FIELD:" + JSON.stringify(safe.text)) }
 }
 '''
 
@@ -202,6 +218,9 @@ def main():
         (root / "config/hello-lock").mkdir(parents=True)
         (root / "shell.qml").write_text(SHELL)
         results["control_read"] = read_once(root, "control")
+        results["empty_read"] = read_once(root, "empty")
+        results["readonly_read"] = read_once(root, "readonly")
+        results["inputfield_read"] = read_once(root, "inputfield")
         results["settings_read"] = read_once(root, "settings")
         results["onboarding_read"] = read_once(root, "onboarding")
         results["paste_small"] = pasted(root, b"Bob\nSmith")
@@ -210,6 +229,13 @@ def main():
     failures = []
     if results["control_read"] is not True:
         failures.append("the control field never read the offer, so this check can't see reads")
+    if results["empty_read"]:
+        failures.append("a window with no text field read the offer: something below Hello Lock "
+                        "reads it, so this check can't tell Hello Lock's fields apart")
+    if results["readonly_read"]:
+        failures.append("a plain read-only TextInput read the clipboard")
+    if results["inputfield_read"]:
+        failures.append("Hello Lock's InputField read the clipboard")
     if results["settings_read"]:
         failures.append("Settings read the clipboard")
     if results["onboarding_read"]:
