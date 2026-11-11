@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.9 — unreleased
+## 0.6.9 — 2026-11-11
 
 Fixes the Medium finding from the Omarchy plugin marketplace review
 (omacom/omarchy-plugin-marketplace#14051): clipboard reads in the Settings and
