@@ -8,12 +8,21 @@ checked, or keep a transfer open by sending slowly. Now every download has a
 byte ceiling (the exact size where pacman knows it), one total deadline,
 an HTTPS-only final URL and a free-space reserve.
 
-No network: urlopen, the clock and the disk-usage call are stand-ins.
+Two kinds of test. Bounded: the connection, the clock and the disk-usage call
+are stand-ins. RealSockets: real sockets on this machine and the real clock,
+because a stand-in response returns after every chunk while a real buffered
+response waits for all it asked for (Codex T146: a byte every 0.03 s kept a
+0.15 s download going for 1.18 s). No network either way.
 """
+import http.client
 import importlib.util
+import re
 from pathlib import Path
+import socket
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -22,6 +31,9 @@ sys.path.insert(0, str(ROOT / "tests/vm"))
 spec = importlib.util.spec_from_file_location("lab_tools", ROOT / "tests/vm/tools.py")
 tools = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tools)
+spec = importlib.util.spec_from_file_location("guest_cachyos", ROOT / "tests/vm/guest-cachyos.py")
+guest = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guest)
 
 GiB = 1024 ** 3
 
@@ -90,7 +102,7 @@ class Bounded(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def serve(self, response):
-        patch = mock.patch.object(tools.urllib.request, "urlopen", return_value=response)
+        patch = mock.patch.object(tools, "_open", side_effect=lambda url, timeout, deadline: response)
         self.opened = patch.start()
         self.addCleanup(patch.stop)
         return response
@@ -144,10 +156,10 @@ class Bounded(unittest.TestCase):
     def test_the_socket_timeout_never_exceeds_the_deadline(self):
         self.serve(Response([b"ok"], self.clock))
         self.fetch((1024, 10))
-        self.assertEqual(self.opened.call_args.kwargs["timeout"], 10)
+        self.assertEqual(self.opened.call_args.args[1], 10)
         self.serve(Response([b"ok"], self.clock))
         self.fetch((1024, 600), name="other")
-        self.assertEqual(self.opened.call_args.kwargs["timeout"], tools.READ_TIMEOUT)
+        self.assertEqual(self.opened.call_args.args[1], tools.READ_TIMEOUT)
 
     def test_an_exact_size_is_required(self):
         for chunks, exact in (([b"a" * 99], 100), ([b"a" * 101], 100)):
@@ -218,17 +230,22 @@ class EveryCaller(unittest.TestCase):
 
     FILES = sorted((ROOT / "tests/vm").glob("*.py"))
 
-    def test_urlopen_is_used_only_by_the_bounded_readers(self):
+    def test_every_connection_goes_through_a_deadline(self):
         for path in self.FILES:
             text = path.read_text()
             with self.subTest(file=path.name):
+                # No urlopen anywhere: the openers that hand each socket to a
+                # deadline are the only way out.
+                self.assertNotIn("urlopen(", text)
                 if path.name == "tools.py":
-                    self.assertEqual(text.count("urlopen("), 1)  # in _stream
+                    self.assertEqual(text.count("build_opener("), 1)
+                    calls = re.findall(r"(?<!def )\b_open\(", text)
+                    self.assertEqual(len(calls), 1)   # only in _stream
                 elif path.name == "guest-cachyos.py":
-                    self.assertEqual(text.count("urlopen("), 1)  # in bounded_download
+                    self.assertEqual(text.count("build_opener("), 1)
                     self.assertIn("def bounded_download(", text)
                 else:
-                    self.assertNotIn("urlopen(", text)
+                    self.assertNotIn("build_opener(", text)
                 # No whole read of a network response (local tar entries are fine).
                 self.assertNotRegex(text, r"response\.read\(\)")
 
@@ -241,6 +258,157 @@ class EveryCaller(unittest.TestCase):
 
     def test_packages_use_pacmans_exact_size(self):
         self.assertIn('exact=int(meta["CSIZE"])', (ROOT / "tests/vm/tools.py").read_text())
+
+
+class Server:
+    """The far end of a real connection, sending on a script in a thread."""
+
+    def __init__(self, sock, script):
+        self.sock = sock
+        self.thread = threading.Thread(target=self.run, args=(script,), daemon=True)
+        self.thread.start()
+
+    def run(self, script):
+        try:
+            for data, pause in script:
+                if data:
+                    self.sock.sendall(data)
+                time.sleep(pause)
+        except OSError:
+            pass                # the reader shut the connection: expected
+
+    def stop(self):
+        self.thread.join(timeout=10)
+        self.sock.close()
+
+
+HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n"
+TRICKLE_BODY = [(HEAD, 0)] + [(b"x", 0.03)] * 40           # Codex's case: 1.2 s
+TRICKLE_HEADERS = [(b"HTTP/1.1 200 OK\r\n", 0)] + [(b"X", 0.03)] * 100
+SILENT = [(b"", 5)]
+WHOLE = [(HEAD + b"x" * 40, 0)]
+DEADLINE = 0.15
+# Generous: the point is "about the deadline", not 1.2 s or 5 s.
+SLACK = 0.6
+
+
+class RealSockets(unittest.TestCase):
+    """Both readers, over real sockets, end at their deadline."""
+
+    def readers(self):
+        return {"tools": lambda: tools.read_url("https://example.test/x", (1024, DEADLINE)),
+                "guest": lambda: guest.bounded_download("https://example.test/x", 1024, DEADLINE)}
+
+    def pair(self, script):
+        client, far = socket.socketpair()
+        # A long per-receive timeout: only the deadline can end things early.
+        client.settimeout(10)
+        server = Server(far, script)
+        self.addCleanup(server.stop)
+        self.addCleanup(client.close)
+        return client
+
+    def response_over(self, client, track):
+        # What _open does, minus TLS: hand the socket to the deadline first,
+        # then read the status line and headers (so a trickle there counts).
+        track(client)
+        response = http.client.HTTPResponse(client, url="https://example.test/x")
+        response.begin()
+        response.url = "https://example.test/x"
+        return response
+
+    def patched(self, name, script):
+        client = self.pair(script)
+        if name == "tools":
+            return mock.patch.object(tools, "_open", lambda url, timeout, deadline:
+                                     self.response_over(client, deadline.track))
+        return mock.patch.object(guest, "_open_tracked", lambda url, timeout, track:
+                                 self.response_over(client, track))
+
+    def timed(self, name, script):
+        with self.patched(name, script):
+            started = time.monotonic()
+            try:
+                result = self.readers()[name]()
+            except (tools.DownloadError, RuntimeError) as error:
+                result = error
+            return result, time.monotonic() - started
+
+    def test_a_trickling_body_ends_at_the_deadline(self):
+        for name in ("tools", "guest"):
+            with self.subTest(reader=name):
+                result, took = self.timed(name, TRICKLE_BODY)
+                self.assertIsInstance(result, RuntimeError)
+                self.assertIn("longer", str(result))
+                self.assertLess(took, DEADLINE + SLACK)
+
+    def test_trickling_headers_end_at_the_deadline(self):
+        for name in ("tools", "guest"):
+            with self.subTest(reader=name):
+                result, took = self.timed(name, TRICKLE_HEADERS)
+                self.assertIsInstance(result, (RuntimeError, OSError, http.client.HTTPException))
+                self.assertLess(took, DEADLINE + SLACK)
+
+    def test_a_silent_server_ends_at_the_deadline_not_the_socket_timeout(self):
+        for name in ("tools", "guest"):
+            with self.subTest(reader=name):
+                result, took = self.timed(name, [(HEAD, 0)] + SILENT)
+                self.assertIsInstance(result, RuntimeError)
+                self.assertLess(took, DEADLINE + SLACK)
+
+    def test_a_prompt_answer_is_read_whole(self):
+        for name in ("tools", "guest"):
+            with self.subTest(reader=name):
+                result, _ = self.timed(name, WHOLE)
+                self.assertEqual(result, b"x" * 40)
+
+    def test_the_real_opener_cuts_a_stuck_tls_handshake(self):
+        """Through the real _open and TLS: the server accepts and says nothing.
+        The socket timeout is 10 s, so only the deadline can end it."""
+        for name in ("tools", "guest"):
+            with self.subTest(reader=name):
+                listener = socket.socket()
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(1)
+                self.addCleanup(listener.close)
+                port = listener.getsockname()[1]
+                accepted = []
+
+                def accept():
+                    try:
+                        conn, _ = listener.accept()
+                        accepted.append(conn)
+                        time.sleep(5)
+                    except OSError:
+                        pass
+                threading.Thread(target=accept, daemon=True).start()
+                real = socket.create_connection
+
+                def local(_address, *args, **kwargs):
+                    sock = real(("127.0.0.1", port), 5)
+                    sock.settimeout(10)
+                    return sock
+                started = time.monotonic()
+                with mock.patch("socket.create_connection", local):
+                    with self.assertRaises((RuntimeError, OSError)):
+                        self.readers()[name]()
+                self.assertLess(time.monotonic() - started, DEADLINE + SLACK)
+                self.assertEqual(len(accepted), 1)   # it really connected
+                for conn in accepted:
+                    conn.close()
+
+    def test_the_deadline_shuts_a_socket_tracked_after_it_passed(self):
+        clock = tools.Deadline(0)
+        time.sleep(0.05)
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        a.settimeout(5)
+        clock.track(a)
+        started = time.monotonic()
+        self.assertEqual(a.recv(10), b"")   # shut, not waiting 5 s
+        self.assertLess(time.monotonic() - started, 1)
+        clock.close()
 
 
 if __name__ == "__main__":

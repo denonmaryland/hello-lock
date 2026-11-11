@@ -2,12 +2,15 @@
 """Prepare private, signature-checked QEMU tools without modifying host packages."""
 import base64
 import hashlib
+import http.client
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import tarfile
+import threading
 import time
 import urllib.request
 
@@ -29,45 +32,141 @@ PACKAGE_DEADLINE = 10 * 60
 PACKAGE_MAX = 512 * MiB          # QEMU's largest piece is about 7 MiB
 # Free space a download must leave on the cache's filesystem.
 RESERVE = 2048 * MiB
-READ_TIMEOUT = 30                   # per read; the deadline bounds the whole
-CHUNK = 1 * MiB
+READ_TIMEOUT = 30                   # per receive; Deadline bounds the whole
+CHUNK = 64 * 1024
 
 
 class DownloadError(RuntimeError):
     """A download went over its size or time limit, or wasn't HTTPS."""
 
 
+class Deadline:
+    """One wall-clock limit for a whole download, connection to last byte.
+
+    A socket timeout restarts on every byte, and a buffered read waits for all
+    the bytes it asked for, so a server sending a byte at a time could keep a
+    download going long past any check made between reads. So when the limit
+    passes, a timer shuts down every connection the download opened (through
+    a duplicate of its socket): a receive that is blocked or trickling ends at
+    once, in the TLS handshake, the headers or the body."""
+
+    def __init__(self, seconds):
+        self.ends = time.monotonic() + seconds
+        self.expired = False
+        self._lock = threading.Lock()
+        self._sockets = []
+        self._timer = threading.Timer(max(0.0, seconds), self._expire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def track(self, sock):
+        copy = sock.dup()   # survives the TLS wrapper detaching the original
+        with self._lock:
+            self._sockets.append(copy)
+            if self.expired:
+                _shut(copy)
+
+    def _expire(self):
+        with self._lock:
+            self.expired = True
+            for sock in self._sockets:
+                _shut(sock)
+
+    def check(self):
+        if self.expired or time.monotonic() >= self.ends:
+            raise DownloadError("Download took longer than allowed")
+
+    def close(self):
+        self._timer.cancel()
+        with self._lock:
+            for sock in self._sockets:
+                sock.close()
+            self._sockets.clear()
+
+
+def _shut(sock):
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
+class _HTTPSOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith("https://"):
+            raise DownloadError("Download was redirected away from HTTPS")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open(url, timeout, deadline):
+    """urlopen, except every connection it makes (redirects too) is handed to
+    `deadline` as soon as it exists, and redirects must stay on HTTPS."""
+    class Connection(http.client.HTTPSConnection):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            create = self._create_connection
+
+            def tracked(*a, **k):
+                sock = create(*a, **k)
+                deadline.track(sock)
+                return sock
+            self._create_connection = tracked
+
+    class Handler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(Connection, req, context=self._context)
+
+    return urllib.request.build_opener(Handler(), _HTTPSOnlyRedirects()).open(url, timeout=timeout)
+
+
 def _stream(url, limit, deadline, write, exact=None, room=None):
-    """Read url into write(chunk); never more than `limit` bytes, never past
-    `deadline` seconds in total (plus at most one read timeout)."""
+    """Read url into write(chunk): never more than `limit` bytes, never past
+    `deadline` seconds from the start of the connection to the last byte."""
     if not url.startswith("https://"):
         raise ValueError("Downloads require HTTPS")
-    ends = time.monotonic() + deadline
-    with urllib.request.urlopen(url, timeout=min(READ_TIMEOUT, deadline)) as response:
-        if not response.geturl().startswith("https://"):
-            raise DownloadError("Download was redirected away from HTTPS")
-        declared = response.headers.get("Content-Length")
-        if declared is not None and declared.isdigit():
-            if int(declared) > limit or (exact is not None and int(declared) != exact):
-                raise DownloadError("Download is larger than allowed")
-        total = 0
-        while True:
-            if time.monotonic() > ends:
-                raise DownloadError("Download took longer than allowed")
-            chunk = response.read(min(CHUNK, limit + 1 - total))
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > limit:
-                raise DownloadError("Download is larger than allowed")
-            if room is not None:
-                room(len(chunk))
-            write(chunk)
-        if time.monotonic() > ends:
-            raise DownloadError("Download took longer than allowed")
-        if exact is not None and total != exact:
-            raise DownloadError("Download is not the expected size")
-    return total
+    clock = Deadline(deadline)
+    try:
+        try:
+            response = _open(url, min(READ_TIMEOUT, deadline), clock)
+        except DownloadError:
+            raise
+        except OSError:
+            clock.check()   # a connection the deadline cut is a timeout
+            raise
+        with response:
+            if not response.geturl().startswith("https://"):
+                raise DownloadError("Download was redirected away from HTTPS")
+            declared = response.headers.get("Content-Length")
+            if declared is not None and declared.isdigit():
+                if int(declared) > limit or (exact is not None and int(declared) != exact):
+                    raise DownloadError("Download is larger than allowed")
+            # read1 returns what has arrived instead of waiting for all of it.
+            read = getattr(response, "read1", response.read)
+            total = 0
+            while True:
+                clock.check()
+                try:
+                    chunk = read(min(CHUNK, limit + 1 - total))
+                except (OSError, http.client.HTTPException):
+                    clock.check()
+                    raise
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise DownloadError("Download is larger than allowed")
+                if room is not None:
+                    room(len(chunk))
+                write(chunk)
+            # A connection the deadline shut down also ends with no data.
+            clock.check()
+            if exact is not None and total != exact:
+                raise DownloadError("Download is not the expected size")
+            if declared is not None and declared.isdigit() and total != int(declared):
+                raise DownloadError("Download ended early")
+        return total
+    finally:
+        clock.close()
 
 
 def free_bytes(path):

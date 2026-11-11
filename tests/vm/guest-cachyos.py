@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Install CachyOS on the lab's second virtual disk; never run on the host."""
+import http.client
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -67,23 +69,97 @@ def run(*args, **kwargs):
         raise
 
 
+def _open_tracked(url, timeout, track):
+    """urlopen, but each connection's socket (redirects too) goes to
+    track(sock) as it is made, and redirects must stay on HTTPS."""
+    class Connection(http.client.HTTPSConnection):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            create = self._create_connection
+
+            def tracked(*a, **k):
+                sock = create(*a, **k)
+                track(sock)
+                return sock
+            self._create_connection = tracked
+
+    class Handler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(Connection, req, context=self._context)
+
+    class Redirects(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            if not newurl.startswith('https://'):
+                raise RuntimeError('Download was redirected away from HTTPS')
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    return urllib.request.build_opener(Handler(), Redirects()).open(url, timeout=timeout)
+
+
 def bounded_download(url, limit, deadline):
-    """A small HTTPS response: refused past `limit` bytes or `deadline` seconds
-    in total (a socket timeout alone only bounds each read)."""
+    """A small HTTPS response, refused past `limit` bytes or `deadline` seconds
+    from connecting to the last byte. A socket timeout restarts on every byte,
+    so a timer shuts the connection down when the deadline passes; that ends a
+    receive that is blocked or trickling. Same rule as tests/vm/tools.py, which
+    this guest-only script can't import."""
+    if not url.startswith('https://'):
+        raise RuntimeError('Downloads require HTTPS')
+    sockets, expired, lock = [], threading.Event(), threading.Lock()
+
+    def shut(sock):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def track(sock):
+        copy = sock.dup()   # survives the TLS wrapper detaching the original
+        with lock:
+            sockets.append(copy)
+            if expired.is_set():
+                shut(copy)
+
+    def expire():
+        with lock:
+            expired.set()
+            for sock in sockets:
+                shut(sock)
+    timer = threading.Timer(deadline, expire)
+    timer.daemon = True
+    timer.start()
     ends = time.monotonic() + deadline
+
+    def late():
+        if expired.is_set() or time.monotonic() >= ends:
+            raise RuntimeError('Download took longer than allowed')
     data = b''
-    with urllib.request.urlopen(url, timeout=30) as response:
-        if not response.geturl().startswith('https://'):
-            raise RuntimeError('Download was redirected away from HTTPS')
-        while True:
-            if time.monotonic() > ends:
-                raise RuntimeError('Download took longer than allowed')
-            chunk = response.read(min(65536, limit + 1 - len(data)))
-            if not chunk:
-                return data
-            data += chunk
-            if len(data) > limit:
-                raise RuntimeError('Download is larger than allowed')
+    try:
+        try:
+            response = _open_tracked(url, min(30, deadline), track)
+        except OSError:
+            late()
+            raise
+        with response:
+            if not response.geturl().startswith('https://'):
+                raise RuntimeError('Download was redirected away from HTTPS')
+            read = getattr(response, 'read1', response.read)
+            while True:
+                late()
+                try:
+                    chunk = read(min(65536, limit + 1 - len(data)))
+                except (OSError, http.client.HTTPException):
+                    late()
+                    raise
+                if not chunk:
+                    late()   # a connection the timer shut down ends with no data
+                    return data
+                data += chunk
+                if len(data) > limit:
+                    raise RuntimeError('Download is larger than allowed')
+    finally:
+        timer.cancel()
+        for sock in sockets:
+            sock.close()
 
 
 def install_system(config, log_file):
