@@ -31,6 +31,8 @@ with open(os.path.join(state, "recorder.pid"), "w") as f:
     f.write(str(os.getpid()))
 with open(sys.argv[sys.argv.index("-o") + 1], "w") as f:
     f.write("raw\n")
+with open(os.path.join(state, "recorder.fd9"), "w") as f:  # the harness lock's descriptor
+    f.write("open" if os.path.exists("/proc/self/fd/9") else "closed")
 stubborn = os.path.exists(os.path.join(state, "stubborn"))
 def stop(number, _frame):
     if stubborn:
@@ -45,6 +47,7 @@ while True:
 '''
 QS = r'''#!/bin/sh
 echo "WARN stand-in effect $HL_EFFECT"
+if [ -e /proc/$$/fd/9 ]; then echo open; else echo closed; fi > "$STUB_STATE/qs.fd9"
 [ -e "$STUB_STATE/hang" ] && { echo started > "$STUB_STATE/qs.started"; sleep 30; }
 exit 0
 '''
@@ -132,6 +135,31 @@ class Harness(unittest.TestCase):
     def assert_gone(self, pid):
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
+
+    def test_the_recorder_and_the_window_never_hold_the_lock(self):
+        # Otherwise a recorder orphaned by a killed script keeps the lock and
+        # every later run waits forever.
+        self.assertEqual(self.run_harness("cells").returncode, 0)
+        self.assertEqual((self.state / "recorder.fd9").read_text(), "closed")
+        self.assertEqual((self.state / "qs.fd9").read_text().strip(), "closed")
+
+    def test_an_orphaned_recorder_does_not_block_the_next_run(self):
+        (self.state / "stubborn").write_text("")
+        process = subprocess.Popen(["bash", str(HARNESS), "cells"], env=self.env, cwd=self.base,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 20
+        while not (self.state / "recorder.pid").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        orphan = int((self.state / "recorder.pid").read_text())
+        process.kill()  # SIGKILL: no trap runs, the recorder is left behind
+        process.wait()
+        os.kill(orphan, 0)  # still running
+        (self.state / "stubborn").unlink()
+        (self.state / "recorder.pid").unlink()
+        self.addCleanup(lambda: os.kill(orphan, signal.SIGKILL))
+        result = self.run_harness("cells")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_victims_untouched()
 
     def test_a_recorder_that_ignores_signals_is_killed_not_waited_on(self):
         (self.state / "stubborn").write_text("")

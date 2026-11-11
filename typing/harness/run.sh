@@ -60,14 +60,16 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-gpu-screen-recorder -w eDP-1 -f 60 -o "$out" >/dev/null 2>&1 &
+# Neither child gets the lock's descriptor (9>&-): a recorder or window left
+# behind by a killed script must not hold the lock for every later run.
+gpu-screen-recorder -w eDP-1 -f 60 -o "$out" >/dev/null 2>&1 9>&- &
 rec=$!
 sleep 0.8
 # In the background, so Ctrl+C is handled at once: timeout runs in its own
 # process group, out of the terminal's reach, and bash would hold a trap until
 # a foreground command ended. A trapped signal interrupts wait right away.
 HL_EFFECT="$here/../$name.qml" HL_LOGO="$logo" HL_REDUCED=$reduced HL_TINT=$tint \
-  timeout 25 qs -p "$here/shell.qml" >"$log" 2>&1 &
+  timeout 25 qs -p "$here/shell.qml" >"$log" 2>&1 9>&- &
 show=$!
 wait "$show"; show=""
 stop "$rec" INT; rec=""

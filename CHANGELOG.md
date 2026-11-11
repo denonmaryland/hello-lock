@@ -42,7 +42,9 @@ wherever else a review of every helper in `bin/` found it.
   private folder from `mktemp -d` and prints its path. Ctrl+C now stops a run
   at once (before, the effect window ran on for up to 25 s), stops the effect
   window and the screen recorder, and removes that folder. A recorder that
-  doesn't stop when asked is killed after 5 s instead of waited on forever. The lock that keeps to
+  doesn't stop when asked is killed after 5 s instead of waited on forever.
+  Neither the recorder nor the effect window holds the lock, so one left
+  behind by a killed run can't keep every later run waiting. The lock that keeps to
   one run at a time is in your own `$XDG_RUNTIME_DIR` and is opened without
   emptying it; the harness won't start if that folder is missing or other
   users can read or write it. Effect names are limited to lowercase letters,
