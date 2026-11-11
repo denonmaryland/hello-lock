@@ -6,7 +6,7 @@ APT_PACKAGES = ["hyprland", "quickshell", "libqt6svg6", "qt6-wayland", "libgl1-m
                 "fonts-dejavu-core", "dbus-x11", "sudo"]
 PROFILES = {
     "arch": {"name": "Arch Linux", "os_id": "arch", "admin_group": "wheel", "ssh_service": "sshd",
-             "packages": ["hyprland", "quickshell", "qt6-svg", "qt6-multimedia", "mesa", "openssh", "python", "ttf-dejavu", "swayidle", "grim"]},
+             "packages": ["hyprland", "quickshell", "qt6-svg", "qt6-multimedia", "mesa", "openssh", "python", "ttf-dejavu", "swayidle", "grim", "wl-clipboard"]},
     "fedora": {"name": "Fedora 44", "os_id": "fedora", "compositor": "Sway", "version_id": "44", "admin_group": "wheel", "ssh_service": "sshd",
                "packages": ["sway", "quickshell", "qt6-qtsvg", "qt6-qtmultimedia", "qt6-qtwayland",
                             "mesa-dri-drivers", "mesa-libEGL", "openssh-server", "python3", "dejavu-sans-fonts", "dbus-x11", "sudo", "util-linux", "swayidle", "grim", "rpm-build"],

@@ -31,6 +31,26 @@ setup text fields.
   to Qt or skips the new typing, and the real fields are tested in Quickshell
   offscreen.
 
+Also fixes a Low finding from the same review: the VM test lab (a development
+tool you run yourself; not part of the lock) downloaded without limits.
+
+- `tests/vm/tools.py` wrote QEMU packages and cloud images to its cache in
+  1 MiB pieces with no total size or time limit, and `tests/vm/lab.py` read
+  the Arch mirror listing and the signing-key README whole. A server, or
+  something answering in its place, could fill the disk or memory before any
+  checksum or signature was checked, or keep a download open by sending
+  slowly: a socket timeout only limits each read.
+- Every lab download now has a size ceiling, checked as it arrives, and one
+  total deadline: packages must be exactly the size pacman's signed database
+  gives; images at most 2 GiB in 30 minutes; signatures 64 KiB; keys,
+  checksum lists and listings 1 MiB. A download must leave 2 GiB free on the
+  cache's disk, and a redirect away from HTTPS is refused. Partial files are
+  still removed, and every checksum and signature check is unchanged. The key
+  download inside the CachyOS guest is limited the same way.
+- The Arch guest installs `wl-clipboard`, and the lab's visual run now also
+  checks in a real Hyprland session that Settings and the setup screen don't
+  read the clipboard (`tests/run-clipboard.py`).
+
 ## 0.6.8 — 2026-11-10
 
 Fixes two findings from the Omarchy plugin marketplace review of 0.6.7

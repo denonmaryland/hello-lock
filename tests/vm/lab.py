@@ -18,10 +18,9 @@ import tarfile
 import threading
 import time
 import traceback
-import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tools import environment, fetch, prepare, private_directory
+from tools import IMAGE, SIGNATURE, environment, fetch, prepare, private_directory, read_url
 from profiles import PROFILES, get as guest_profile, verify_identity
 from images import ImageUnavailable
 
@@ -121,8 +120,7 @@ def image(cache, distro="arch"):
         return prepare_image(cache, distro)
     images = cache / "images"
     private_directory(images)
-    with urllib.request.urlopen(MIRROR, timeout=30) as response:
-        listing = response.read().decode()
+    listing = read_url(MIRROR).decode()
     names = sorted(set(re.findall(r'Arch-Linux-x86_64-cloudimg-[0-9.]+\.qcow2', listing)))
     if not names:
         raise RuntimeError("No dated official Arch cloud image found")
@@ -134,8 +132,7 @@ def image(cache, distro="arch"):
     key = home / "arch-boxes.asc"
     if not key.exists():
         url = "https://raw.githubusercontent.com/archlinux/arch-boxes/master/README.md"
-        with urllib.request.urlopen(url, timeout=30) as response:
-            readme = response.read().decode()
+        readme = read_url(url).decode()
         block = re.search(r"-----BEGIN PGP PUBLIC KEY BLOCK-----.*?-----END PGP PUBLIC KEY BLOCK-----", readme, re.S)
         if not block:
             raise RuntimeError("Official image signing key not found")
@@ -147,9 +144,9 @@ def image(cache, distro="arch"):
     subprocess.run(["gpg", "--homedir", str(home), "--batch", "--import", str(key)], check=True, capture_output=True)
     if not destination.exists():
         print("Downloading official Arch cloud image", flush=True)
-        fetch(MIRROR + name, destination)
+        fetch(MIRROR + name, destination, IMAGE)
     if not signature.exists():
-        fetch(MIRROR + name + ".sig", signature)
+        fetch(MIRROR + name + ".sig", signature, SIGNATURE)
     subprocess.run(["gpg", "--homedir", str(home), "--batch", "--verify", str(signature), str(destination)], check=True, capture_output=True)
     probe = subprocess.run([str(cache / "tools/usr/bin/qemu-img"), "info", "--output=json", str(destination)],
                            env=environment(cache / "tools"), capture_output=True, text=True, check=True)
@@ -271,10 +268,10 @@ def run_vm(cache, memory, wait_seconds, reserve=1536, distro="arch", suite="visu
 def source_bundle(destination, suite="visual", runtime_root=Path("/usr/share/omarchy/shell")):
     import runpy
     files = runpy.run_path(str(ROOT / "bin/hello-lock"))["VISUAL_FILES"]
-    selected = list(files) + ["standalone", "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/standalone.md", "docs/packaging.md", "docs/release-review.md", "tests/run-standalone.py",
+    selected = list(files) + ["standalone", "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/standalone.md", "docs/packaging.md", "docs/release-review.md", "tests/run-standalone.py", "tests/run-clipboard.py", "Onboarding.qml",
                              "tests/vm/guest-session.py", "tests/vm/guest-test.py", "tests/vm/guest-auth.py", "tests/vm/guest-suspend.py", "tests/vm/sentinel.qml", "tests/vm/profiles.py"]
     if suite == "lock-loss":
-        selected += ["Service.qml", "Onboarding.qml", "adapters", "tests/vm/guest-security.py",
+        selected += ["Service.qml", "adapters", "tests/vm/guest-security.py",
                      "tests/vm/security.qml", "tests/vm/pam-password"]
     def header(member):
         member.uid = member.gid = 0

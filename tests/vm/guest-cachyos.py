@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 SERIAL = 'HELLO_CACHYOS_TARGET'
@@ -66,6 +67,25 @@ def run(*args, **kwargs):
         raise
 
 
+def bounded_download(url, limit, deadline):
+    """A small HTTPS response: refused past `limit` bytes or `deadline` seconds
+    in total (a socket timeout alone only bounds each read)."""
+    ends = time.monotonic() + deadline
+    data = b''
+    with urllib.request.urlopen(url, timeout=30) as response:
+        if not response.geturl().startswith('https://'):
+            raise RuntimeError('Download was redirected away from HTTPS')
+        while True:
+            if time.monotonic() > ends:
+                raise RuntimeError('Download took longer than allowed')
+            chunk = response.read(min(65536, limit + 1 - len(data)))
+            if not chunk:
+                return data
+            data += chunk
+            if len(data) > limit:
+                raise RuntimeError('Download is larger than allowed')
+
+
 def install_system(config, log_file):
     # System creation needs a normal umask. Protect the credential-bearing log
     # explicitly instead of imposing private modes on the target's /etc tree.
@@ -118,8 +138,8 @@ def main():
         STAGE = 'signing-key'
         key_file = work / 'cachyos-public-key.asc'
         progress(status='running', command='public-key-download')
-        with urllib.request.urlopen('https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x' + KEY, timeout=45) as response:
-            key_file.write_bytes(response.read(1024 * 1024))
+        key_file.write_bytes(bounded_download('https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x' + KEY,
+                                              1024 * 1024, 120))
         run('pacman-key', '--add', str(key_file))
         info = run('gpg', '--homedir', '/etc/pacman.d/gnupg', '--with-colons', '--fingerprint', KEY, capture_output=True, text=True)
         if KEY not in [s.split(':')[9] for s in info.stdout.splitlines() if s.startswith('fpr:')]:

@@ -9,6 +9,7 @@ import platform
 import time
 import importlib.util
 import re
+import shutil
 
 
 def main(authentication=False):
@@ -53,6 +54,24 @@ def main(authentication=False):
             result['visual_diagnostics'] = [label for label in ('IndentationError', 'SyntaxError', 'AssertionError', 'RuntimeError', 'ReferenceError', 'TypeError') if label in text]
             result['visual_failure_locations'] = sorted(set(re.findall(r'([A-Za-z0-9_-]+\.qml:[0-9]+)', text)))
             result['visual_python_lines'] = re.findall(r'File "[^"\n]*run-standalone\.py", line ([0-9]+)', text)
+        # Settings and setup never let Qt read the clipboard (0.6.9). Runs
+        # whatever the visual suite did: it's independent of it. Needs
+        # wl-clipboard in the guest; profiles without it say so.
+        result['clipboard_tested'] = False
+        if shutil.which('wl-copy') and shutil.which('wl-paste'):
+            stage = result['stage']
+            result['stage'] = 'clipboard'
+            with (home / 'clipboard-tests.log').open('w') as log:
+                clip = subprocess.run([sys.executable, str(root / 'tests/run-clipboard.py')],
+                                      stdout=log, stderr=subprocess.STDOUT, timeout=240)
+            text = (home / 'clipboard-tests.log').read_text(errors='replace')
+            found = re.search(r'CLIPBOARD:(\{.*\})', text)
+            result.update(clipboard_tested=True, clipboard_suite_exit=clip.returncode,
+                          clipboard=json.loads(found.group(1)) if found else None,
+                          clipboard_failures=re.findall(r'FAIL: (.*)', text))
+            if clip.returncode:
+                result['status'] = 'failed'
+            result['stage'] = stage
         if test.returncode == 0 and authentication:
             result['stage'] = 'standalone-authentication'
             auth_spec = importlib.util.spec_from_file_location('guest_auth', Path(__file__).with_name('guest-auth.py'))

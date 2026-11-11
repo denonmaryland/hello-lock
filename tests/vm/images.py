@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import subprocess
 from urllib.parse import urlsplit
-from tools import fetch, private_directory, environment
+from tools import fetch, private_directory, environment, IMAGE, METADATA, SIGNATURE
 from profiles import get
 
 
@@ -36,7 +36,7 @@ def prepare_image(cache, name):
     home = work / 'verification'
     private_directory(home)
     key = home / 'public-key'
-    if not key.exists(): fetch(profile['key_url'], key)
+    if not key.exists(): fetch(profile['key_url'], key, METADATA)
     info = subprocess.run(['gpg', '--homedir', str(home), '--batch', '--with-colons', '--show-keys', str(key)], check=True, capture_output=True, text=True)
     fingerprints = [line.split(':')[9] for line in info.stdout.splitlines() if line.startswith('fpr:')]
     if profile['fingerprint'] not in fingerprints:
@@ -47,9 +47,9 @@ def prepare_image(cache, name):
     ring.write_bytes(export.stdout)
     sums = work / 'checksums'
     if not profile.get('immutable_checksums') or not sums.exists():
-        fetch(profile['sums_url'], sums)
+        fetch(profile['sums_url'], sums, METADATA)
     if profile.get('signature_url'):
-        signature = work / 'checksums.sig'; fetch(profile['signature_url'], signature)
+        signature = work / 'checksums.sig'; fetch(profile['signature_url'], signature, SIGNATURE)
         subprocess.run(['gpgv', '--homedir', str(home), '--keyring', str(ring), str(signature), str(sums)], check=True, capture_output=True)
         text = sums.read_text()
     else:
@@ -66,7 +66,7 @@ def prepare_image(cache, name):
             return hashlib.file_digest(stream, profile['hash']).hexdigest() == digest
     if not valid():
         print('Downloading official ' + profile['name'] + ' image', flush=True)
-        fetch(profile['image_url'], destination)
+        fetch(profile['image_url'], destination, IMAGE)
     if not valid(): raise ValueError('Distribution image checksum mismatch')
     probe = subprocess.run([str(cache / 'tools/usr/bin/qemu-img'), 'info', '--output=json', str(destination)],
                            env=environment(cache / 'tools'), capture_output=True, text=True, check=True)
