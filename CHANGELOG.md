@@ -2,9 +2,10 @@
 
 ## 0.6.8 — 2026-11-10
 
-Fixes a finding from the Omarchy plugin marketplace review of 0.6.7
-(omacom/omarchy-plugin-marketplace#14051), and the same kind of problem
-wherever else a review of every helper in `bin/` found it.
+Fixes two findings from the Omarchy plugin marketplace review of 0.6.7
+(omacom/omarchy-plugin-marketplace#14051), the doctor's cleanup advice and the
+typing-effect harness's shared temporary files, and the same kind of problem
+wherever else a review of every script found it.
 
 - `bin/hello-lock-doctor` suggested `rm -f '<name>' ...` for every
   `/tmp/hello-lock-*.jpg`, whoever owned the file and whatever its name
