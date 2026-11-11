@@ -43,9 +43,11 @@ tool you run yourself; not part of the lock) downloaded without limits.
 - Every lab download now has a size ceiling, checked as it arrives, and one
   total deadline: packages must be exactly the size pacman's signed database
   gives; images at most 2 GiB in 30 minutes; signatures 64 KiB; keys,
-  checksum lists and listings 1 MiB. The deadline is a hard stop: when it
-  passes, the connection is shut down, so a server sending a byte at a time
-  can't keep a download going (each byte would restart a socket timeout). A
+  checksum lists and listings 1 MiB. The deadline is a hard stop, from the
+  name lookup to the last byte: a slow lookup is given up on, each address
+  gets only the time that is left, and when time runs out the connection is
+  shut down, so a server sending a byte at a time can't keep a download
+  going (each byte would restart a socket timeout). A
   download must leave 2 GiB free on the cache's disk, and a redirect away
   from HTTPS is refused before it is followed. Partial files are
   still removed, and every checksum and signature check is unchanged. The key

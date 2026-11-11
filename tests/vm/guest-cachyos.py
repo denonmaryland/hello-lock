@@ -69,19 +69,54 @@ def run(*args, **kwargs):
         raise
 
 
-def _open_tracked(url, timeout, track):
-    """urlopen, but each connection's socket (redirects too) goes to
-    track(sock) as it is made, and redirects must stay on HTTPS."""
+def _connect(address, timeout, source_address, track, remaining):
+    """socket.create_connection within the deadline: the lookup (in a thread
+    left behind if it is late) and each address get only the time left, and
+    every socket goes to track() before it connects."""
+    host, port = address
+    found = {}
+
+    def lookup():
+        try:
+            found['addresses'] = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        except OSError as error:
+            found['error'] = error
+    thread = threading.Thread(target=lookup, daemon=True)
+    thread.start()
+    thread.join(max(0.0, remaining()))
+    if thread.is_alive() or remaining() <= 0:
+        raise RuntimeError('Download took longer than allowed')
+    if 'error' in found:
+        raise found['error']
+    error = None
+    for family, kind, proto, _name, target in found['addresses']:
+        if remaining() <= 0:
+            raise RuntimeError('Download took longer than allowed')
+        sock = socket.socket(family, kind, proto)
+        try:
+            track(sock)
+            sock.settimeout(max(0.001, min(timeout, remaining())))
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(target)
+            sock.settimeout(timeout)
+            return sock
+        except OSError as failure:
+            sock.close()
+            error = failure
+    if remaining() <= 0:
+        raise RuntimeError('Download took longer than allowed')
+    raise error if error is not None else OSError('no address to connect to')
+
+
+def _open_tracked(url, timeout, track, remaining):
+    """urlopen, but every connection (redirects too) is made by _connect,
+    within the deadline, and redirects must stay on HTTPS."""
     class Connection(http.client.HTTPSConnection):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            create = self._create_connection
-
-            def tracked(*a, **k):
-                sock = create(*a, **k)
-                track(sock)
-                return sock
-            self._create_connection = tracked
+            self._create_connection = (lambda address, timeout=30, source_address=None:
+                                       _connect(address, timeout, source_address, track, remaining))
 
     class Handler(urllib.request.HTTPSHandler):
         def https_open(self, req):
@@ -98,7 +133,7 @@ def _open_tracked(url, timeout, track):
 
 def bounded_download(url, limit, deadline):
     """A small HTTPS response, refused past `limit` bytes or `deadline` seconds
-    from connecting to the last byte. A socket timeout restarts on every byte,
+    from the name lookup to the last byte. A socket timeout restarts on every byte,
     so a timer shuts the connection down when the deadline passes; that ends a
     receive that is blocked or trickling. Same rule as tests/vm/tools.py, which
     this guest-only script can't import."""
@@ -135,7 +170,7 @@ def bounded_download(url, limit, deadline):
     data = b''
     try:
         try:
-            response = _open_tracked(url, min(30, deadline), track)
+            response = _open_tracked(url, min(30, deadline), track, lambda: ends - time.monotonic())
         except OSError:
             late()
             raise

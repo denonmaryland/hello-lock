@@ -322,7 +322,7 @@ class RealSockets(unittest.TestCase):
         if name == "tools":
             return mock.patch.object(tools, "_open", lambda url, timeout, deadline:
                                      self.response_over(client, deadline.track))
-        return mock.patch.object(guest, "_open_tracked", lambda url, timeout, track:
+        return mock.patch.object(guest, "_open_tracked", lambda url, timeout, track, remaining:
                                  self.response_over(client, track))
 
     def timed(self, name, script):
@@ -362,40 +362,102 @@ class RealSockets(unittest.TestCase):
                 result, _ = self.timed(name, WHOLE)
                 self.assertEqual(result, b"x" * 40)
 
+    def listener(self, hold=5):
+        """A loopback server that accepts and then says nothing."""
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(4)
+        self.addCleanup(server.close)
+        accepted = []
+
+        def accept():
+            try:
+                conn, _ = server.accept()
+                accepted.append(conn)
+                time.sleep(hold)
+                conn.close()
+            except OSError:
+                pass
+        threading.Thread(target=accept, daemon=True).start()
+        return server.getsockname()[1], accepted
+
+    def through_real_opener(self, name, addresses, socket_class=None):
+        """Run a reader through the real opener and connect(), with getaddrinfo
+        (and optionally socket.socket) replaced. Returns (error, seconds)."""
+        patches = [mock.patch("socket.getaddrinfo", addresses if callable(addresses)
+                              else (lambda *a, **k: addresses))]
+        if socket_class is not None:
+            patches.append(mock.patch("socket.socket", socket_class))
+        started = time.monotonic()
+        error = None
+        for patch in patches:
+            patch.start()
+        try:
+            self.readers()[name]()
+        except Exception as caught:   # noqa: BLE001 - the type is checked below
+            error = caught
+        finally:
+            for patch in reversed(patches):
+                patch.stop()
+        return error, time.monotonic() - started
+
     def test_the_real_opener_cuts_a_stuck_tls_handshake(self):
-        """Through the real _open and TLS: the server accepts and says nothing.
-        The socket timeout is 10 s, so only the deadline can end it."""
+        """Through the real opener and TLS: the server accepts and says
+        nothing. Only the deadline can end it (the socket timeout is 30 s)."""
         for name in ("tools", "guest"):
             with self.subTest(reader=name):
-                listener = socket.socket()
-                listener.bind(("127.0.0.1", 0))
-                listener.listen(1)
-                self.addCleanup(listener.close)
-                port = listener.getsockname()[1]
-                accepted = []
-
-                def accept():
-                    try:
-                        conn, _ = listener.accept()
-                        accepted.append(conn)
-                        time.sleep(5)
-                    except OSError:
-                        pass
-                threading.Thread(target=accept, daemon=True).start()
-                real = socket.create_connection
-
-                def local(_address, *args, **kwargs):
-                    sock = real(("127.0.0.1", port), 5)
-                    sock.settimeout(10)
-                    return sock
-                started = time.monotonic()
-                with mock.patch("socket.create_connection", local):
-                    with self.assertRaises((RuntimeError, OSError)):
-                        self.readers()[name]()
-                self.assertLess(time.monotonic() - started, DEADLINE + SLACK)
+                port, accepted = self.listener()
+                local = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", port))]
+                error, took = self.through_real_opener(name, local)
+                self.assertIsInstance(error, (RuntimeError, OSError))
+                self.assertLess(took, DEADLINE + SLACK)
                 self.assertEqual(len(accepted), 1)   # it really connected
-                for conn in accepted:
-                    conn.close()
+
+    def test_a_slow_name_lookup_ends_at_the_deadline(self):
+        # Codex T150: getaddrinfo ran before the deadline was watched.
+        def slow(*_args, **_kwargs):
+            time.sleep(0.9)
+            raise socket.gaierror("synthetic slow resolver")
+        for name in ("tools", "guest"):
+            with self.subTest(reader=name):
+                error, took = self.through_real_opener(name, slow)
+                self.assertIsInstance(error, RuntimeError)
+                self.assertIn("longer", str(error))
+                self.assertLess(took, DEADLINE + SLACK)
+
+    def test_many_slow_addresses_share_one_deadline(self):
+        # Codex T150: each address used to get the full per-try timeout.
+        attempts = []
+
+        class Stuck(socket.socket):
+            def connect(self, address):
+                attempts.append(self.gettimeout())
+                time.sleep(self.gettimeout())
+                raise TimeoutError("synthetic connect timeout")
+        eight = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", 1))] * 8
+        for name in ("tools", "guest"):
+            with self.subTest(reader=name):
+                attempts.clear()
+                error, took = self.through_real_opener(name, eight, Stuck)
+                self.assertIsInstance(error, RuntimeError)
+                self.assertIn("longer", str(error))
+                self.assertLess(took, DEADLINE + SLACK)
+                self.assertLessEqual(len(attempts), 2)
+                self.assertTrue(all(timeout <= DEADLINE for timeout in attempts))
+
+    def test_a_failed_address_falls_through_to_the_next(self):
+        """Normal fallback still works: a refused address, then a live one."""
+        for name in ("tools", "guest"):
+            with self.subTest(reader=name):
+                port, accepted = self.listener(hold=1)
+                closed = socket.socket()
+                closed.bind(("127.0.0.1", 0))
+                dead = closed.getsockname()[1]
+                closed.close()   # nothing listens there: refused
+                pair = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", dead)),
+                        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", port))]
+                self.through_real_opener(name, pair)
+                self.assertEqual(len(accepted), 1)   # reached the second address
 
     def test_the_deadline_shuts_a_socket_tracked_after_it_passed(self):
         clock = tools.Deadline(0)

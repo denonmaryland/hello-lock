@@ -41,7 +41,8 @@ class DownloadError(RuntimeError):
 
 
 class Deadline:
-    """One wall-clock limit for a whole download, connection to last byte.
+    """One wall-clock limit for a whole download: name lookup, connecting,
+    TLS handshake, headers and body.
 
     A socket timeout restarts on every byte, and a buffered read waits for all
     the bytes it asked for, so a server sending a byte at a time could keep a
@@ -72,8 +73,11 @@ class Deadline:
             for sock in self._sockets:
                 _shut(sock)
 
+    def remaining(self):
+        return self.ends - time.monotonic()
+
     def check(self):
-        if self.expired or time.monotonic() >= self.ends:
+        if self.expired or self.remaining() <= 0:
             raise DownloadError("Download took longer than allowed")
 
     def close(self):
@@ -98,19 +102,59 @@ class _HTTPSOnlyRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def resolve(host, port, deadline):
+    """getaddrinfo, given up on when the deadline passes. The system resolver
+    can't be interrupted, so it runs in a thread that is left to finish on
+    its own (it ends at the resolver's own timeout)."""
+    found = {}
+
+    def lookup():
+        try:
+            found["addresses"] = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        except OSError as error:
+            found["error"] = error
+    thread = threading.Thread(target=lookup, daemon=True)
+    thread.start()
+    thread.join(max(0.0, deadline.remaining()))
+    if thread.is_alive():
+        raise DownloadError("Download took longer than allowed")
+    if "error" in found:
+        raise found["error"]
+    return found["addresses"]
+
+
+def connect(address, timeout, source_address, deadline):
+    """socket.create_connection within the deadline: the lookup, and each
+    address tried in turn, get only the time that is left, and every socket
+    is handed to the deadline before it connects."""
+    host, port = address
+    error = None
+    for family, kind, proto, _name, target in resolve(host, port, deadline):
+        deadline.check()
+        sock = socket.socket(family, kind, proto)
+        try:
+            deadline.track(sock)
+            sock.settimeout(max(0.001, min(timeout, deadline.remaining())))
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(target)
+            sock.settimeout(timeout)
+            return sock
+        except OSError as failure:
+            sock.close()
+            error = failure
+    deadline.check()
+    raise error if error is not None else OSError("no address to connect to")
+
+
 def _open(url, timeout, deadline):
-    """urlopen, except every connection it makes (redirects too) is handed to
-    `deadline` as soon as it exists, and redirects must stay on HTTPS."""
+    """urlopen, except every connection it makes (redirects too) is made by
+    connect(), within the deadline, and redirects must stay on HTTPS."""
     class Connection(http.client.HTTPSConnection):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            create = self._create_connection
-
-            def tracked(*a, **k):
-                sock = create(*a, **k)
-                deadline.track(sock)
-                return sock
-            self._create_connection = tracked
+            self._create_connection = (lambda address, timeout=READ_TIMEOUT, source_address=None:
+                                       connect(address, timeout, source_address, deadline))
 
     class Handler(urllib.request.HTTPSHandler):
         def https_open(self, req):
