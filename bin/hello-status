@@ -18,6 +18,7 @@ Sources (all read-only):
   updates   the checkupdates temp sync DB ($CHECKUPDATES_DB or
             /tmp/checkup-db-$UID), refreshed by the bar's omarchy.system-update
             widget via omarchy-update-available; counted offline from that local database (a read-only pacman query).
+            Used only when the folder is this user's own and not writable by others.
   special   date-based greeting (holidays, Friday afternoon, Monday morning, and
             the --birthday date, passed from ~/.config/hello-lock/config.json).
 
@@ -31,6 +32,7 @@ import glob
 import json
 import os
 import select
+import stat
 import subprocess
 import sys
 import threading
@@ -302,9 +304,21 @@ def refresh_weather_main():
 
 
 # ---------------------------------------------------------------- updates
+def own_folder(path):
+    """True for a real folder (not a symlink) that only this user can write."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
+            and not st.st_mode & 0o022)
+
+
 def updates():
     db = os.environ.get("CHECKUPDATES_DB") or "/tmp/checkup-db-%d" % os.getuid()
-    if not (os.path.isdir(os.path.join(db, "sync"))
+    # The default is a fixed name in /tmp, where another user can get there
+    # first. Only read a database this user made: pacman would parse it.
+    if not (own_folder(db) and own_folder(os.path.join(db, "sync"))
             and os.path.exists(os.path.join(db, "local"))):
         return None
     try:

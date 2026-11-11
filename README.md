@@ -299,7 +299,7 @@ generation and a listening-preview command are in [sounds/README.md](sounds/READ
 ~/.config/omarchy/plugins/hello-lock/bin/hello-lock-doctor
 ```
 
-It checks that Hello Lock is installed, enabled and loaded, that the stock lock is off, that the PAM file is there, that `grim`, `pw-play` and the bundled fonts and sounds are present, and that your `config.json` is valid: unknown keys, wrong types, the birthday format, and whether your logo and symbol files exist. It also shows your sound settings, any leftover snapshots and whether its Omarchy menu entry is in the section your Omarchy uses (Appearance on 4.5, Style on 4.0). Every problem comes with how to fix it.
+It checks that Hello Lock is installed, enabled and loaded, that the stock lock is off, that the PAM file is there, that `grim`, `pw-play` and the bundled fonts and sounds are present, and that your `config.json` is valid: unknown keys, wrong types, the birthday format, and whether your logo and symbol files exist. It also shows your sound settings, any leftover snapshots and whether its Omarchy menu entry is in the section your Omarchy uses (Appearance on 4.5, Style on 4.0). Every problem comes with how to fix it. Commands it suggests are quoted for the shell, and it only lists snapshot files that are Hello Lock's own: your files, with the names Hello Lock gives them.
 
 It only reads; it changes nothing. It doesn't go online unless you add `--online`, which tests reaching wttr.in. `--json` prints machine-readable output, and `--config PATH` checks another config file. It exits 0 when all is good, 1 on warnings and 2 on problems. `bin/hello-config doctor` runs the same thing.
 
@@ -325,7 +325,7 @@ The lock doesn't wait for capture. Files are removed after all monitors finish t
 
 **Weather is the only thing that goes online.** `bin/hello-status` asks [wttr.in](https://wttr.in) for the temperature and conditions, with `curl`. It sends your weather location from Omarchy's weather settings (coordinates or a place name; if you haven't set one, wttr.in guesses from your IP) and whether you want °C or °F. wttr.in sees your IP. It asks when the shell starts and when you lock, but the answer is cached for 30 minutes in `~/.cache/hello-lock/weather.json`, so that's at most one request per 30 minutes (plus a retry when a request fails). The reply is capped at 4096 bytes: reading stops there, and a longer reply counts as no weather. Set `"weather": false` and Hello Lock makes no network requests at all. Nothing else in Hello Lock connects to the network.
 
-**Everything else is local.** The rest of the status line comes from your own machine: the battery from `/sys/class/power_supply`, the update count from the package database the Omarchy bar already downloaded (counted offline; nothing is downloaded), and greetings from the date and your `birthday`. Sounds are WAV files in the plugin folder, played with `pw-play` or `paplay`.
+**Everything else is local.** The rest of the status line comes from your own machine: the battery from `/sys/class/power_supply`, the update count from the package database the Omarchy bar already downloaded (counted offline; nothing is downloaded; used only when that folder in `/tmp` is your own and not writable by others), and greetings from the date and your `birthday`. Sounds are WAV files in the plugin folder, played with `pw-play` or `paplay`.
 
 </details>
 

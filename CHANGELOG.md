@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.8 — 2026-11-10
+
+Fixes a finding from the Omarchy plugin marketplace review of 0.6.7
+(omacom/omarchy-plugin-marketplace#14051), and the same kind of problem
+wherever else a review of every helper in `bin/` found it.
+
+- `bin/hello-lock-doctor` suggested `rm -f '<name>' ...` for every
+  `/tmp/hello-lock-*.jpg`, whoever owned the file and whatever its name
+  contained, and printed it as a fix. Another user on the same machine could
+  plant a file whose name ran a command when the fix was pasted. Now a
+  leftover snapshot is only a regular file (never a symlink) owned by you,
+  with a name Hello Lock itself gives: `hello-lock-snapshot-*/<number>.jpg`
+  in your own folder, or the older `hello-lock-<output>.jpg`. Anything else is
+  not listed and not counted.
+- Every command the doctor suggests is now quoted word by word for the shell.
+  That covers paths from `--config`, logo and symbol paths from `config.json`,
+  the runtime folder, the plugin folder, and the id of another lock plugin.
+  Before, those were pasted into the command as they were. A fix no longer
+  repeats an unknown `config.json` key.
+- If a name in a command has characters that can't be printed safely, the
+  doctor shows no command for it.
+- Terminal output escapes control characters, invisible formatting characters
+  (such as the ones that reorder text) and broken Unicode, in every line. A
+  file name or setting can no longer clear the screen or fake a line. A
+  `config.json` value with broken Unicode used to crash the doctor. `--json`
+  output was already escaped.
+- `bin/hello-status` counts updates from `/tmp/checkup-db-$UID` (or
+  `$CHECKUPDATES_DB`) only when that folder and its `sync` folder are real
+  folders, owned by you and not writable by your group or others. The name is
+  fixed and `/tmp` is shared, so before, another user could create it first
+  and have `pacman` read their database. If your update count disappears,
+  check that folder's owner and mode.
+- Typing-effect names the doctor reports are limited to lowercase letters,
+  digits and dashes, as the standalone lock already does.
+- The other helpers in `bin/` were checked for the same three things (trusting
+  a shared folder, building shell text, printing names as they are) and needed
+  no change.
+- No change to the password, fingerprint, PAM or lock-session code. Only
+  `bin/hello-lock-doctor`, `bin/hello-status` and tests changed.
+
 ## 0.6.7 — 2026-11-10
 
 Fixes a finding from the Omarchy plugin marketplace review of 0.6.6

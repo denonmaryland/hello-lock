@@ -20,10 +20,12 @@ import json
 import os
 import pwd
 import re
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
+import unicodedata
 
 HOME = os.path.expanduser("~")
 OWN_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -59,6 +61,39 @@ def add(section, status, title, detail="", fix=""):
 def tilde(path):
     path = str(path)
     return "~" + path[len(HOME):] if path == HOME or path.startswith(HOME + "/") else path
+
+
+def visible(text):
+    """Text that is safe to print: control characters, invisible formatting
+    characters (such as the ones that reorder text) and lone surrogates become
+    escapes. A file name or setting can then never move the cursor, start a
+    line of its own or change how the rest of a line reads."""
+    out = []
+    for ch in str(text):
+        if unicodedata.category(ch) in ("Cc", "Cf", "Cs", "Zl", "Zp"):
+            n = ord(ch)
+            out.append("\\x%02x" % n if n < 0x100 else "\\u%04x" % n if n < 0x10000 else "\\U%08x" % n)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def shell_word(word):
+    """One word of a shell command, quoted. A path in the home folder keeps a
+    leading ~/ outside the quotes, so it stays short and still expands."""
+    word = str(word)
+    if word.startswith(HOME + "/"):
+        return "~/" + shlex.quote(word[len(HOME) + 1:])
+    return shlex.quote(word)
+
+
+def command(*words):
+    """A command to show as a fix. People paste these, and the paths, names
+    and ids in them come from files anyone may have written, so every word is
+    quoted for the shell. Fixed text such as "&&" is added by the caller."""
+    if any(visible(w) != str(w) for w in words):
+        return "no command shown: a name in it has characters that can't be printed safely"
+    return " ".join(shell_word(w) for w in words)
 
 
 def run(cmd, timeout=4, env=None):
@@ -181,8 +216,9 @@ def wordmark_styles(plugin_dir):
 
 def typing_effects(plugin_dir):
     """Effect names with a typing/<name>.qml in the plugin (README and harness aren't effects)."""
-    return sorted(os.path.splitext(os.path.basename(p))[0]
-                  for p in glob.glob(os.path.join(plugin_dir, "typing", "*.qml")))
+    names = (os.path.splitext(os.path.basename(p))[0]
+             for p in glob.glob(os.path.join(plugin_dir, "typing", "*.qml")))
+    return sorted(n for n in names if re.fullmatch(r"[a-z0-9-]+", n))
 
 
 def splash_variants(plugin_dir):
@@ -313,12 +349,13 @@ def check_install(plugin_dir):
         add(S, OK, "The stock lock (%s) is switched off" % STOCK_ID)
     for other in others:
         add(S, ERROR if enabled else INFO, "Another lock plugin is enabled: %s" % other,
-            "Only one lock service should run." if enabled else "It replaces the stock lock.", "omarchy plugin disable %s && omarchy restart shell" % other)
+            "Only one lock service should run." if enabled else "It replaces the stock lock.",
+            command("omarchy", "plugin", "disable", other) + " && omarchy restart shell")
 
     for d in sorted({os.path.realpath(INSTALL_DIR) if manifest is not None else None,
                      os.path.realpath(OWN_DIR)} - {None}):
         rc, out, err = run([omarchy_cmd("omarchy-plugin-validate"), d], timeout=10)
-        msg = (err or out).replace("omarchy-plugin-validate: ", "")
+        msg = "; ".join((err or out).replace("omarchy-plugin-validate: ", "").splitlines())
         if rc == 0:
             add(S, OK, "omarchy plugin validate passes for %s" % tilde(d))
         elif rc == -1:
@@ -461,7 +498,7 @@ def check_deps(plugin_dir, cfg):
     for b in ("hello-status", "hello-sound", "hello-config", "hello-snapshot", "hello-wordmark"):
         p = os.path.join(plugin_dir, "bin", b)
         if not os.access(p, os.X_OK):
-            add(S, ERROR, "bin/%s is missing or not executable" % b, tilde(p), "chmod +x %s" % tilde(p))
+            add(S, ERROR, "bin/%s is missing or not executable" % b, tilde(p), command("chmod", "+x", p))
 
 
 # ------------------------------------------------------------ config
@@ -489,20 +526,20 @@ def check_image(S, key, value, config_dir, plugin_dir, symbols):
             hint = suggest(name.lower(), symbols)
             add(S, ERROR, '%s: "%s" is not a built-in symbol' % (key, v),
                 ("Did you mean \"@%s\"? " % hint if hint else "") + "Built-ins are the names in symbols/.",
-                "ls %s" % tilde(os.path.join(plugin_dir, "symbols")))
+                command("ls", os.path.join(plugin_dir, "symbols")))
             return
     path = resolve_path(v, config_dir, plugin_dir)
     shown = '%s: "%s"' % (key, v)
     if v.startswith("~") and not v.startswith("~/"):
         add(S, ERROR, shown + " uses ~ in a way Hello Lock doesn't expand",
-            "Only a leading ~/ is expanded.", "write the full path, e.g. %s/..." % HOME)
+            "Only a leading ~/ is expanded.", "write the full path")
         return
     if not os.path.exists(path):
         add(S, ERROR, shown + " doesn't exist", "Looked for %s." % tilde(path),
             "fix the path in config.json, or run setup again: omarchy-shell lock onboarding")
         return
     if not os.path.isfile(path) or not os.access(path, os.R_OK):
-        add(S, ERROR, shown + " isn't a readable file", tilde(path), "chmod 644 %s" % tilde(path))
+        add(S, ERROR, shown + " isn't a readable file", tilde(path), command("chmod", "644", path))
         return
     ext = os.path.splitext(path)[1].lower()
     if ext not in IMAGE_TYPES:
@@ -545,7 +582,7 @@ def check_config(config_path, config_dir, plugin_dir):
     try:
         raw = open(config_path, encoding="utf-8").read()
     except OSError as e:
-        add(S, ERROR, "%s can't be read" % tilde(config_path), str(e), "chmod 644 %s" % tilde(config_path))
+        add(S, ERROR, "%s can't be read" % tilde(config_path), str(e), command("chmod", "644", config_path))
         return cfg
     if not raw.strip():
         add(S, OK, "%s is empty; using defaults" % tilde(config_path))
@@ -555,7 +592,7 @@ def check_config(config_path, config_dir, plugin_dir):
     except ValueError as e:
         add(S, ERROR, "%s is not valid JSON" % tilde(config_path),
             "%s. Hello Lock ignores the whole file until it's fixed." % e,
-            "python3 -m json.tool %s" % tilde(config_path))
+            command("python3", "-m", "json.tool", config_path))
         return cfg
     if not isinstance(parsed, dict):
         add(S, ERROR, "%s must be a JSON object ({ ... })" % tilde(config_path),
@@ -571,7 +608,7 @@ def check_config(config_path, config_dir, plugin_dir):
             add(S, WARN, 'Unknown key "%s"' % key,
                 ('Did you mean "%s"? Hello Lock ignores it.' % hint) if hint else
                 "Hello Lock ignores it. Known keys: " + ", ".join(sorted(schema)) + " (from %s)." % schema_src,
-                'rename or remove "%s" in config.json' % key)
+                "rename or remove that key in config.json")
 
     for key, t in schema.items():
         if key not in cfg or t is None:
@@ -752,12 +789,12 @@ def check_sound(cfg, config_dir):
         return
     off = os.path.join(config_dir, "sounds-off")
     if os.path.exists(off):
-        add(S, INFO, "Sounds are off (%s exists)" % tilde(off), "", "rm %s" % tilde(off))
+        add(S, INFO, "Sounds are off (%s exists)" % tilde(off), "", command("rm", off))
         return
     conf_path = os.path.join(config_dir, "sound.conf")
     conf, bad, exists = read_sound_conf(conf_path)
     for line, why in bad:
-        add(S, WARN, "sound.conf %s is ignored" % line, why, "edit %s" % tilde(conf_path))
+        add(S, WARN, "sound.conf %s is ignored" % line, why, "edit " + shell_word(conf_path))
     qs, qe = conf["QUIET_START"], conf["QUIET_END"]
     if qs is None or qe is None or qs == qe:
         add(S, INFO, "Sounds on, volume %.2f, no quiet hours" % conf["VOLUME"])
@@ -768,7 +805,7 @@ def check_sound(cfg, config_dir):
             conf["VOLUME"], qs, qe, " (quiet right now)" if inside else ""),
             "" if exists else "Defaults; set them in %s." % tilde(conf_path))
     if conf["VOLUME"] == 0:
-        add(S, WARN, "sound.conf sets VOLUME=0, so sounds are silent", "", "edit %s" % tilde(conf_path))
+        add(S, WARN, "sound.conf sets VOLUME=0, so sounds are silent", "", "edit " + shell_word(conf_path))
     if shutil.which("wpctl"):
         rc, out, _ = run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], timeout=2)
         if rc == 0 and "[MUTED]" in out:
@@ -779,6 +816,47 @@ def check_sound(cfg, config_dir):
 
 
 # ------------------------------------------------------------ leftovers
+# What bin/hello-snapshot writes: <runtime>/hello-lock-snapshot-XXXXXXXX/<n>.jpg.
+# Releases before it wrote hello-lock-<output>.jpg in the runtime folder or /tmp.
+CAPTURE_DIR = re.compile(r"hello-lock-snapshot-[A-Za-z0-9_]+")
+CAPTURE_FILE = re.compile(r"[0-9]+\.jpg")
+LEGACY_CAPTURE = re.compile(r"hello-lock-[A-Za-z0-9._-]+\.jpg")
+LEGACY_DIR = "/tmp"
+
+
+def own_entries(directory, pattern, is_kind):
+    """Paths in `directory` whose whole name matches `pattern` and that are this
+    user's own file or folder itself (lstat: a symlink never counts). /tmp and
+    a shared runtime folder are writable by others, so a name alone proves
+    nothing about who made it or what it is."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    paths = []
+    for name in sorted(names):
+        if not pattern.fullmatch(name):
+            continue
+        path = os.path.join(directory, name)
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if is_kind(st.st_mode) and st.st_uid == os.geteuid():
+            paths.append(path)
+    return paths
+
+
+def leftover_captures(runtime):
+    """Hello Lock's own power-down captures that are still on disk."""
+    found = []
+    for directory in dict.fromkeys((runtime, LEGACY_DIR)):
+        found += own_entries(directory, LEGACY_CAPTURE, stat.S_ISREG)
+    for folder in own_entries(runtime, CAPTURE_DIR, stat.S_ISDIR):
+        found += own_entries(folder, CAPTURE_FILE, stat.S_ISREG)
+    return sorted(set(found))
+
+
 def check_leftovers(shell_state):
     S = "Leftovers"
     env = shell_process_env()
@@ -795,12 +873,10 @@ def check_leftovers(shell_state):
             st = os.stat(runtime)
             if st.st_mode & 0o066:
                 add(S, WARN, "%s is readable or writable by other users (mode %o)" % (runtime, st.st_mode & 0o777),
-                    "Power-down captures are skipped until it is private.", "chmod 700 %s" % runtime)
+                    "Power-down captures are skipped until it is private.", command("chmod", "700", runtime))
         except OSError:
             pass
-    found = sorted(set(glob.glob(os.path.join(runtime, "hello-lock-*.jpg"))
-                       + glob.glob(os.path.join(runtime, "hello-lock-snapshot-*", "*.jpg"))
-                       + glob.glob("/tmp/hello-lock-*.jpg")))
+    found = leftover_captures(runtime)
     if not found:
         add(S, OK, "No power-down snapshots left in %s" % runtime)
     elif shell_state.get("locked"):
@@ -809,7 +885,7 @@ def check_leftovers(shell_state):
         add(S, WARN, "%d power-down snapshot(s) left behind" % len(found),
             "They're screenshots of your desktop from the last lock: " + ", ".join(found)
             + ". Hello Lock deletes them on unlock; a crash can leave them.",
-            "rm -f " + " ".join("'%s'" % f for f in found))
+            command("rm", "-f", "--", *found))
     menu = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"),
                         "omarchy", "extensions", "omarchy-menu.jsonc")
     readable = []
@@ -824,7 +900,7 @@ def check_leftovers(shell_state):
         add(S, WARN, "%d Omarchy menu backup(s) readable by other users" % len(readable),
             "Older Hello Lock versions saved them with your umask: " + ", ".join(tilde(p) for p in readable)
             + ". The service makes them private when it loads.",
-            os.path.join(OWN_DIR, "bin", "hello-menu") + " secure")
+            command(os.path.join(OWN_DIR, "bin", "hello-menu"), "secure"))
     state_dir =os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state"),
                              "hello-lock")
     done = os.path.join(state_dir, "onboarded")
@@ -858,7 +934,7 @@ def check_menu():
     except Exception as e:  # a broken helper is reported, never fatal
         add(S, WARN, "Couldn't load bin/hello-menu", str(e))
         return
-    fix = os.path.join(OWN_DIR, "bin", "hello-menu")
+    fix = command(os.path.join(OWN_DIR, "bin", "hello-menu"))
     section = hm.detected_section()
     label = hm.section_label(section)
     key = hm.menu_key(section)
@@ -914,9 +990,9 @@ def check_online(cfg):
 def render(color, cfg_path):
     def paint(code, s):
         return "\033[%sm%s\033[0m" % (code, s) if color else s
-    print(paint("1", "Hello Lock doctor") + "  " + tilde(cfg_path))
+    print(paint("1", "Hello Lock doctor") + "  " + visible(tilde(cfg_path)))
     section = None
-    for c in checks:
+    for c in ({k: visible(v) for k, v in c.items()} for c in checks):
         if c["section"] != section:
             section = c["section"]
             print("\n" + paint("1", section))
