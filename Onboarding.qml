@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import "platform" as Commons
+import "platform/SafeTyping.js" as SafeTyping
 
 // First-run setup for Hello Lock: name, birthday, a logo (a typed wordmark in
 // the Omarchy logo's style, an image, or the Omarchy logo), the unlock symbol
@@ -17,6 +18,8 @@ Item {
 
   // Supplied by Service.qml.
   property string pluginDir: ""
+  // Ctrl+V in the text fields: a bounded read outside the shell (bin/hello-paste).
+  Commons.SafePaste { id: safePaste }
   property string configDir: ""
   property string backgroundPath: ""
   property int backgroundVersion: 0
@@ -780,6 +783,10 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             TextInput {
               id: nameInput
+              // Never writable to Qt: a writable field reads the whole clipboard on every change.
+              readOnly: true
+              cursorVisible: activeFocus
+              Keys.onPressed: (event) => SafeTyping.key(nameInput, event, safePaste)
               anchors.fill: parent
               anchors.leftMargin: 20; anchors.rightMargin: 20
               verticalAlignment: TextInput.AlignVCenter
@@ -806,6 +813,10 @@ Item {
               width: 110
               TextInput {
                 id: monthInput
+                // Never writable to Qt: a writable field reads the whole clipboard on every change.
+                readOnly: true
+                cursorVisible: activeFocus
+                Keys.onPressed: (event) => SafeTyping.key(monthInput, event, safePaste)
                 anchors.fill: parent
                 verticalAlignment: TextInput.AlignVCenter
                 horizontalAlignment: TextInput.AlignHCenter
@@ -834,6 +845,9 @@ Item {
               width: 110
               TextInput {
                 id: dayInput
+                // Never writable to Qt: a writable field reads the whole clipboard on every change.
+                readOnly: true
+                cursorVisible: activeFocus
                 anchors.fill: parent
                 verticalAlignment: TextInput.AlignVCenter
                 horizontalAlignment: TextInput.AlignHCenter
@@ -850,6 +864,7 @@ Item {
                 Keys.onEscapePressed: root.back()
                 Keys.onPressed: function(event) {
                   if (event.key === Qt.Key_Backspace && text.length === 0) { monthInput.forceActiveFocus(); event.accepted = true }
+                  else SafeTyping.key(dayInput, event, safePaste)
                 }
                 Text { anchors.centerIn: parent; visible: !parent.text; text: "DD"; color: Qt.rgba(root.text.r, root.text.g, root.text.b, 0.3); font: parent.font }
               }
@@ -886,6 +901,10 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             TextInput {
               id: wordmarkInput
+              // Never writable to Qt: a writable field reads the whole clipboard on every change.
+              readOnly: true
+              cursorVisible: activeFocus
+              Keys.onPressed: (event) => SafeTyping.key(wordmarkInput, event, safePaste)
               anchors.fill: parent
               anchors.leftMargin: 20; anchors.rightMargin: 20
               verticalAlignment: TextInput.AlignVCenter

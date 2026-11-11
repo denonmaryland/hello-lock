@@ -1,0 +1,93 @@
+#!/usr/bin/env -S python3 -I
+"""Hello Lock paste helper: the clipboard's text, bounded, outside the shell.
+
+Usage: hello-paste
+
+Settings and Onboarding keep their text fields read-only to Qt, because a
+writable Qt text field reads the whole clipboard in the shell on every
+clipboard change, with no size limit (omacom/omarchy-plugin-marketplace#14051).
+Ctrl+V in those fields runs this instead. It asks `wl-paste` for a text type,
+reads at most 4096 bytes within 1 second, and kills `wl-paste` if either
+limit is passed. It prints the text as one line: line breaks and tabs become
+spaces, control and invisible formatting characters are dropped, and runs
+of spaces are kept as typed.
+
+Exit 0: the text was printed (it may be empty). Exit 1: no text on the
+clipboard, `wl-paste` is missing, or it failed. Exit 3: the clipboard held
+more than 4096 bytes or took longer than 1 second; nothing is printed.
+"""
+import os
+import re
+import select
+import subprocess
+import sys
+import time
+import unicodedata
+
+LIMIT = 4096
+TIMEOUT = 1.0
+COMMAND = ["wl-paste", "--no-newline", "--type", "text"]
+
+
+def run_bounded(argv, limit, timeout):
+    """(returncode, stdout bytes), or "over" past the limit or the deadline,
+    or None if the program can't start. Never holds more than limit + 1 bytes;
+    the program is killed as soon as a limit is passed. stderr is discarded."""
+    try:
+        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+    deadline = time.monotonic() + timeout
+    data = b""
+    try:
+        fd = p.stdout.fileno()
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                return "over"
+            chunk = os.read(fd, limit + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+            if len(data) > limit:
+                return "over"
+        try:
+            return p.wait(max(0.0, deadline - time.monotonic())), data
+        except subprocess.TimeoutExpired:
+            return "over"
+    finally:
+        if p.poll() is None:
+            try:
+                p.kill()
+                p.wait(1)
+            except Exception:
+                pass
+        p.stdout.close()
+
+
+def one_line(text):
+    text = re.sub(r"[\r\n\t\v\f\u0085\u2028\u2029]+", " ", text)
+    return "".join(c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn"))
+
+
+def main():
+    if len(sys.argv) > 1:
+        sys.stderr.write(__doc__)
+        return 2
+    result = run_bounded(COMMAND, LIMIT, TIMEOUT)
+    if result is None:
+        return 1
+    if result == "over":
+        return 3
+    code, data = result
+    if code != 0:
+        return 1
+    # A cut at the byte limit never splits a character: over the limit is refused.
+    text = one_line(data.decode("utf-8", errors="replace").replace("\ufffd", ""))
+    sys.stdout.write(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

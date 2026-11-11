@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.9 — unreleased
+
+Fixes the Medium finding from the Omarchy plugin marketplace review
+(omacom/omarchy-plugin-marketplace#14051): clipboard reads in the Settings and
+setup text fields.
+
+- A writable Qt text field reads the whole clipboard each time the clipboard
+  changes, focused or not, to know whether Paste is possible. On Wayland that
+  read has no size limit and runs in the shell, so another program could
+  offer a huge or never-ending clipboard and stall the shell or fill its
+  memory while Settings or the setup screen was open. Hidden setup steps and
+  disabled fields read it too.
+- Those fields (every text field in Settings, and the name, birthday and
+  wordmark fields of the setup screen) are now read-only to Qt for good, which
+  is the one state where Qt doesn't read the clipboard. Hello Lock does the
+  typing itself (`platform/SafeTyping.js`): letters, Backspace and Delete
+  (with Ctrl for a word), Cut, and each field's length limit and number rules.
+  Moving the cursor, selecting, Copy and Enter work as before.
+- Ctrl+V and Shift+Insert run `bin/hello-paste` instead. It reads the
+  clipboard's text with `wl-paste` in its own process, at most 4096 bytes and
+  for at most one second, and kills `wl-paste` past either limit; a longer
+  paste is ignored. Pasted text becomes one line, without control or
+  invisible formatting characters, cut to the field's limit.
+- What these fields lose: input methods (fcitx, IBus) and undo. Middle-click
+  paste is gone too.
+- The lock screen's password fields are unchanged: no password, fingerprint,
+  PAM or lock-session code changed.
+- A test fails if any text field in Settings or the setup screen is writable
+  to Qt or skips the new typing, and the real fields are tested in Quickshell
+  offscreen.
+
 ## 0.6.8 — 2026-11-10
 
 Fixes two findings from the Omarchy plugin marketplace review of 0.6.7

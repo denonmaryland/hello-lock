@@ -1,11 +1,19 @@
 import QtQuick
 import QtQuick.Controls as QQC
+import "../platform"
+import "../platform/SafeTyping.js" as SafeTyping
 
 // A text field on the deepest surface; focus draws the accent border and a
 // soft 3 px ring. `mono` sets it in Share Tech Mono with `tracking` (em);
 // `suffix` is a hint drawn at the right edge (e.g. "+ ONLINE").
+// Read-only to Qt for good: a writable field reads the whole clipboard in the
+// shell on every clipboard change. Typing and a bounded paste come from
+// platform/SafeTyping.js and SafePaste.qml; `enabled` still turns it off.
 QQC.TextField {
   id: field
+  readOnly: true
+  cursorVisible: activeFocus
+  Keys.onPressed: (event) => { if (field.enabled) SafeTyping.key(field, event, paste) }
   property bool mono: false
   property real tracking: 0
   property string suffix: ""
@@ -28,6 +36,8 @@ QQC.TextField {
   font.weight: mono ? Font.Normal : Font.Medium
   font.letterSpacing: size * tracking
   opacity: enabled ? 1 : 0.55
+
+  SafePaste { id: paste }
 
   background: Rectangle {
     radius: 8
