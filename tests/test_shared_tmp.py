@@ -264,9 +264,22 @@ class FixedSharedPaths(unittest.TestCase):
         "docs/code-review-2026-10-25.md": "history: the fixed screenshot fallback",
     }
 
+    @staticmethod
+    def project_files():
+        """The project's files: tracked or new, never ones git ignores (a
+        private local guide, build output). Without git (an archive of the
+        tree), every file."""
+        try:
+            listed = subprocess.run(
+                ["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                capture_output=True, check=True, timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            return list(ROOT.rglob("*"))
+        return [ROOT / os.fsdecode(name) for name in listed.split(b"\0") if name]
+
     def test_every_file_naming_a_shared_folder_is_reviewed(self):
         named = set()
-        for path in ROOT.rglob("*"):
+        for path in self.project_files():
             relative = path.relative_to(ROOT)
             if not path.is_file() or path.is_symlink() or relative.parts[0].startswith("."):
                 continue
