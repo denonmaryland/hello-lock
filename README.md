@@ -262,6 +262,7 @@ Create `~/.config/hello-lock/config.json`. Every field is optional, and changes 
 | `unlockAnimation` | `true` | `false` unlocks immediately after successful authentication, without the 360 ms visual handoff delay or desktop splash. Preview buttons still let you inspect animations. |
 | `unlockDuration` | `0` | Maximum desktop overlay time, in whole milliseconds: `0` keeps natural timing, or `500`–`8000` sets a cap (Settings shows seconds). Shorter sequences can finish earlier. Does not change the lock release time. |
 | `clock` | `true` | The clock and date on the lock screen. |
+| `clockFormat` | `"12h"` | `"12h"` shows the time with AM/PM, `"24h"` shows `00:00`–`23:59` (Settings → Lock screen → **Clock**). |
 | `typingEffect` | `"cells"` | What the logo does while you type: `"cells"`, `"scanline"`, `"liquid"`, `"decrypt"`, `"equalizer"`, `"sweep"`, `"pulse"`, `"off"`, or `"shuffle"` for a different one each lock (see [Typing effects](#typing-effects)). |
 | `handoff` | `"shuffle"` | How the logo hands over to the symbol at unlock: `"fallback"`, `"liftoff"`, `"slide"`, `"flip"`, `"dissolve"`, `"split"`, `"blinds"`, `"scatter"`, `"wipe"`, `"glitch"`, `"poweroff"`, `"flythrough"`, `"fold"`, `"drop"`, `"pixelate"`, or `"shuffle"` (see [Transitions](#transitions)). |
 | `motion` | `"auto"` | Calmer animations: fades instead of big motion, on the lock screen and the unlock. `"auto"` follows Hyprland's `animations:enabled`, `"full"` always animates, `"reduced"` always calms. |

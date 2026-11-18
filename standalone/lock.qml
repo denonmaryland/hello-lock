@@ -388,6 +388,7 @@ ShellRoot {
           item.logoPath = Qt.binding(function() { return root.logo })
           item.tintLogo = Qt.binding(function() { return root.setting("tintLogo") !== false })
           item.showClock = root.config.clock !== false
+          item.use24Hour = root.config.clockFormat === "24h"
           item.reducedMotion = Qt.binding(function() { return root.calm })
           item.typingEffect = Qt.binding(function() { return root.lockPlan.effect || (root.config.typingEffect === "shuffle" ? "cells" : (root.config.typingEffect || "cells")) })
           item.screenCount = Qt.binding(function() { return Quickshell.screens.length })

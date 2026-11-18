@@ -49,6 +49,7 @@ Item {
         logoTinted: stage.s.logoTinted
         version: stage.s.previewVersion
         showClock: stage.s.clock
+        use24Hour: stage.s.clockFormat === "24h"
         caps: stage.caps
         opacity: stage.lockIn
         scale: stage.fade ? 1 : 0.985 + 0.015 * stage.lockIn

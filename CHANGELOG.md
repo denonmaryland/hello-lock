@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The lock clock can show 24-hour time: Settings → Lock screen → **Clock**, or
+  `"clockFormat": "24h"` in `config.json` (thanks @rmyou, #6). The 12-hour
+  clock, still the default, now shows AM/PM so 1:00 and 13:00 can't be confused.
+
 ## 0.6.9 — 2026-11-11
 
 Fixes the Medium finding from the Omarchy plugin marketplace review

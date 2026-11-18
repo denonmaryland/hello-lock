@@ -40,7 +40,7 @@ SOUND_DEFAULTS = {"volume": 0.5, "quietStart": 23, "quietEnd": 7}
 KEEP_BACKUPS = 10
 IMAGE_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED = {"name", "brand", "logo", "symbol", "symbolParts", "tintLogo", "birthday", "wordmarkStyle",
-           "sounds", "weather", "powerDown", "legendary", "clock", "wordmarkText", "motion",
+           "sounds", "weather", "powerDown", "legendary", "clock", "clockFormat", "wordmarkText", "motion",
            "typingEffect", "typingSound", "handoff", "greeting", "unlockBackdrop", "unlockAnimation", "unlockDuration",
            "brandingPresets", "presetMode", "selectedPreset", "weatherLocation", "weatherUnit"}
 
@@ -78,6 +78,8 @@ def save(raw, backup=True):
         raise ValueError("weatherLocation must be text of at most 128 characters")
     if update.get("weatherUnit") is not None and update["weatherUnit"] not in ("auto", "metric", "imperial"):
         raise ValueError("weatherUnit must be auto, metric or imperial")
+    if update.get("clockFormat") is not None and update["clockFormat"] not in ("12h", "24h"):
+        raise ValueError("clockFormat must be 12h or 24h")
     if update.get("unlockAnimation") is not None and not isinstance(update["unlockAnimation"], bool):
         raise ValueError("unlockAnimation must be true or false")
     duration = update.get("unlockDuration")

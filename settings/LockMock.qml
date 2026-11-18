@@ -13,6 +13,7 @@ Item {
   property bool logoTinted: true
   property int version: 0
   property bool showClock: true
+  property bool use24Hour: false
   property bool showField: true
   property bool caps: false
   property int dots: 0
@@ -24,13 +25,16 @@ Item {
   readonly property Item logoBox: box
   readonly property real logoAspect: probe.implicitHeight > 0 ? probe.implicitWidth / probe.implicitHeight : 4
 
-  // Like the lock screen: 12-hour time and an upper-case date.
+  // Like the lock screen: 12-hour time with AM/PM or 24-hour time, and an
+  // upper-case date.
   readonly property var now: new Date()
   readonly property string timeString: {
-    var h = now.getHours() % 12
+    var h = now.getHours()
     var m = now.getMinutes()
-    return (h === 0 ? 12 : h) + ":" + (m < 10 ? "0" + m : m)
+    var mm = m < 10 ? "0" + m : m
+    return use24Hour ? (h < 10 ? "0" + h : h) + ":" + mm : (h % 12 || 12) + ":" + mm
   }
+  readonly property string meridiemString: use24Hour ? "" : now.getHours() < 12 ? "AM" : "PM"
   readonly property string dateString: Qt.formatDate(now, "dddd · MMMM d").toUpperCase()
 
   Image {
@@ -47,14 +51,28 @@ Item {
     anchors.horizontalCenter: parent.horizontalCenter
     y: Math.round(mock.height * 0.15 - height / 2)
     spacing: Math.round(mock.height * (mock.compact ? 0.01 : 0.006))
-    Text {
+    Row {
       anchors.horizontalCenter: parent.horizontalCenter
-      text: mock.timeString
-      color: Theme.lockText
-      font.family: Theme.display
-      font.weight: Font.Light
-      font.pixelSize: Math.max(8, Math.round(mock.height * (mock.compact ? 0.14 : 0.095)))
-      textFormat: Text.PlainText
+      spacing: Math.round(mockTime.font.pixelSize * 0.1)
+      Text {
+        id: mockTime
+        text: mock.timeString
+        color: Theme.lockText
+        font.family: Theme.display
+        font.weight: Font.Light
+        font.pixelSize: Math.max(8, Math.round(mock.height * (mock.compact ? 0.14 : 0.095)))
+        textFormat: Text.PlainText
+      }
+      Text {
+        anchors.baseline: mockTime.baseline
+        visible: text !== ""
+        text: mock.meridiemString
+        color: Theme.lockText
+        font.family: Theme.display
+        font.weight: Font.Light
+        font.pixelSize: Math.max(4, Math.round(mockTime.font.pixelSize * 0.3))
+        textFormat: Text.PlainText
+      }
     }
     MonoText {
       anchors.horizontalCenter: parent.horizontalCenter

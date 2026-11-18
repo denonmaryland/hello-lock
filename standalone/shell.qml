@@ -163,6 +163,7 @@ ShellRoot {
       logoPath: root.logo
       tintLogo: root.config.tintLogo !== false
       showClock: root.config.clock !== false
+      use24Hour: root.config.clockFormat === "24h"
       reducedMotion: root.calm
       typingEffect: root.previewEffect
       passwordText: "x".repeat(root.typed)

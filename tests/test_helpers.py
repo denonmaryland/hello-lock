@@ -170,6 +170,17 @@ class Helpers(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(self.cfg.read_text()), {"name": "A", "greeting": False, "unlockBackdrop": False})
 
+    def test_clock_format_is_validated_and_saved(self):
+        self.cfg.write_text('{"name":"A"}\n')
+        for value in ("24", "12H", True, 24):
+            result = self.run_helper("hello-config", "save", json.dumps({"clockFormat": value}))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(json.loads(self.cfg.read_text()), {"name": "A"})
+        self.assertEqual(self.run_helper("hello-config", "save", '{"clockFormat":"24h"}').returncode, 0)
+        self.assertEqual(json.loads(self.cfg.read_text()), {"name": "A", "clockFormat": "24h"})
+        self.assertEqual(self.run_helper("hello-config", "save", '{"clockFormat":null}').returncode, 0)
+        self.assertEqual(json.loads(self.cfg.read_text()), {"name": "A"})
+
     def test_handoff_setting_is_saved(self):
         self.cfg.write_text('{"name":"A"}\n')
         self.assertEqual(self.run_helper("hello-config", "save", '{"handoff":"glitch"}').returncode, 0)

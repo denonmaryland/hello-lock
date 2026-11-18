@@ -122,6 +122,7 @@ Item {
             logoTinted: stage.center.tinted
             version: stage.s.previewVersion
             showClock: stage.s.clock
+            use24Hour: stage.s.clockFormat === "24h"
           }
         }
         Item {
@@ -250,6 +251,7 @@ Item {
         logoTinted: side.lk ? side.lk.tinted : true
         version: stage.s.previewVersion
         showClock: stage.s.clock
+        use24Hour: stage.s.clockFormat === "24h"
       }
     }
     Item {
