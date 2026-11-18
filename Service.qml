@@ -935,14 +935,16 @@ Item {
       // created, and after the last reload). If Hyprland never confirms it, the
       // cover maps anyway after 300 ms and may fade in: a cover that fades in
       // still beats one that never maps, which would leave the desktop exposed.
-      // A mapped cover stays mapped.
+      // A mapped cover stays mapped: the latch is set from the gate, not from
+      // onVisibleChanged, since visible reads the latch (a binding loop).
       property real ruleLaunchNeeded: 0
       property bool ruleWaitExpired: false
       property bool shownLatched: false
       readonly property bool ruleReady: root.coverRuleValid && root.coverRuleEpoch >= ruleLaunchNeeded
+      readonly property bool gateOpen: root.lockCoverShown && (ruleReady || ruleWaitExpired)
       screen: modelData
       visible: root.lockCoverShown && (shownLatched || ruleReady || ruleWaitExpired)
-      onVisibleChanged: if (visible) shownLatched = true
+      onGateOpenChanged: if (gateOpen) shownLatched = true
       onRuleReadyChanged: if (ruleReady) ruleWaitExpired = false
       Component.onCompleted: {
         ruleLaunchNeeded = root.coverRuleLaunches + 1
