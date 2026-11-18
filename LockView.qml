@@ -14,6 +14,7 @@ Item {
   property string logoPath: ""
   property bool tintLogo: true
   property bool showClock: true
+  property bool use24Hour: false
   // Shared hooks from Service.qml: reduced motion (config "motion" or Hyprland
   // animations off), and this surface's screen position for multi-monitor timing.
   property bool reducedMotion: false
@@ -297,6 +298,7 @@ Item {
   // Clock strings; reassigning an identical string does not notify, so the
   // text only re-lays out when the minute (or day) actually changes.
   property string timeString: ""
+  property string meridiemString: ""
   readonly property int clockFontSize: Math.round(height * 0.095)
   readonly property int dateFontSize: Math.max(11, Math.round(height * 0.016))
   property string dateString: ""
@@ -305,7 +307,9 @@ Item {
     var now = new Date()
     var h = now.getHours()
     var m = now.getMinutes()
-    timeString = (h < 10 ? "0" + h : h) + ":" + (m < 10 ? "0" + m : m)
+    var mm = m < 10 ? "0" + m : m
+    timeString = use24Hour ? (h < 10 ? "0" + h : h) + ":" + mm : (h % 12 || 12) + ":" + mm
+    meridiemString = use24Hour ? "" : h < 12 ? "AM" : "PM"
     dateString = Qt.formatDate(now, "dddd · MMMM d").toUpperCase()
   }
 
@@ -447,14 +451,15 @@ Item {
   onInputEnabledChanged: {
     if (inputEnabled) Qt.callLater(forcePasswordFocus)
   }
-  onVisibleChanged: {
-    if (!visible) return
-    // Catch up silently: only minutes turning over in view cross-fade.
+  // Catch up silently: only minutes turning over in view cross-fade.
+  function resetClock() {
     clockTurn.complete()
     clockTime.previous = ""
     refreshClock()
     clockTime.previous = clockTime.text
   }
+  onVisibleChanged: if (visible) resetClock()
+  onUse24HourChanged: resetClock()
   onReducedMotionChanged: if (reducedMotion) { shakeAnimation.stop(); inputField.shakeT = 1; stopGlitch() }
   Component.onCompleted: {
     refreshClock()
@@ -587,54 +592,72 @@ Item {
             shadowVerticalOffset: 1
           }
 
-          Text {
-            id: clockTime
+          Row {
             anchors.horizontalCenter: parent.horizontalCenter
-            textFormat: Text.PlainText
-            text: root.timeString
-            // Alpha, not opacity, carries the cross-fade: opacity would also
-            // fade the outgoing copy, which is a child.
-            color: Qt.rgba(Commons.Color.lock.text.r, Commons.Color.lock.text.g, Commons.Color.lock.text.b,
-                           Commons.Color.lock.text.a * incoming)
-            font.family: "Oxanium"
-            font.weight: Font.Light
-            font.variableAxes: ({ "wght": 270 })
-            font.pixelSize: root.clockFontSize
-            font.letterSpacing: root.clockFontSize * 0.01
-            renderType: Text.QtRendering
+            spacing: Math.round(root.clockFontSize * 0.1)
 
-            // A new minute cross-fades in over the old one (a fade, so reduced
-            // motion keeps it). Only while the lock shows; the time set when
-            // the lock appears is instant.
-            property string previous: ""
-            property real incoming: 1
             Text {
-              id: clockOutgoing
-              anchors.centerIn: parent
+              id: clockTime
               textFormat: Text.PlainText
-              color: Commons.Color.lock.text
-              font: clockTime.font
+              text: root.timeString
+              // Alpha, not opacity, carries the cross-fade: opacity would also
+              // fade the outgoing copy, which is a child.
+              color: Qt.rgba(Commons.Color.lock.text.r, Commons.Color.lock.text.g, Commons.Color.lock.text.b,
+                             Commons.Color.lock.text.a * incoming)
+              font.family: "Oxanium"
+              font.weight: Font.Light
+              font.variableAxes: ({ "wght": 270 })
+              font.pixelSize: root.clockFontSize
+              font.letterSpacing: root.clockFontSize * 0.01
               renderType: Text.QtRendering
-              opacity: 0
-              visible: opacity > 0
-            }
-            onTextChanged: {
-              if (previous && root.visible && !root.unlocking) {
-                clockOutgoing.text = previous
-                clockTurn.restart()
+
+              // A new minute cross-fades in over the old one (a fade, so reduced
+              // motion keeps it). Only while the lock shows; the time set when
+              // the lock appears is instant.
+              property string previous: ""
+              property real incoming: 1
+              Text {
+                id: clockOutgoing
+                anchors.centerIn: parent
+                textFormat: Text.PlainText
+                color: Commons.Color.lock.text
+                font: clockTime.font
+                renderType: Text.QtRendering
+                opacity: 0
+                visible: opacity > 0
               }
-              previous = clockTime.text
-            }
-            // Staggered so the two times barely overlap (overlapping digits at
-            // half strength read as a smudge): out first, in 80 ms later.
-            ParallelAnimation {
-              id: clockTurn
-              NumberAnimation { target: clockOutgoing; property: "opacity"; from: 1; to: 0; duration: 160; easing.type: Easing.InOutQuad }
-              SequentialAnimation {
-                PropertyAction { target: clockTime; property: "incoming"; value: 0 }
-                PauseAnimation { duration: 80 }
-                NumberAnimation { target: clockTime; property: "incoming"; to: 1; duration: 220; easing.type: Easing.OutCubic }
+              onTextChanged: {
+                if (previous && root.visible && !root.unlocking) {
+                  clockOutgoing.text = previous
+                  clockTurn.restart()
+                }
+                previous = clockTime.text
               }
+              // Staggered so the two times barely overlap (overlapping digits at
+              // half strength read as a smudge): out first, in 80 ms later.
+              ParallelAnimation {
+                id: clockTurn
+                NumberAnimation { target: clockOutgoing; property: "opacity"; from: 1; to: 0; duration: 160; easing.type: Easing.InOutQuad }
+                SequentialAnimation {
+                  PropertyAction { target: clockTime; property: "incoming"; value: 0 }
+                  PauseAnimation { duration: 80 }
+                  NumberAnimation { target: clockTime; property: "incoming"; to: 1; duration: 220; easing.type: Easing.OutCubic }
+                }
+              }
+            }
+
+            Text {
+              anchors.baseline: clockTime.baseline
+              visible: text !== ""
+              textFormat: Text.PlainText
+              text: root.meridiemString
+              color: Commons.Color.lock.text
+              font.family: "Oxanium"
+              font.weight: Font.Light
+              font.variableAxes: ({ "wght": 270 })
+              font.pixelSize: Math.round(root.clockFontSize * 0.3)
+              font.letterSpacing: root.clockFontSize * 0.02
+              renderType: Text.QtRendering
             }
           }
 

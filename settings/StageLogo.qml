@@ -34,6 +34,7 @@ Item {
         logoTinted: stage.s.logoTinted
         version: stage.s.previewVersion
         showClock: stage.s.clock
+        use24Hour: stage.s.clockFormat === "24h"
       }
       UiText {
         visible: stage.s.logoPreview === ""

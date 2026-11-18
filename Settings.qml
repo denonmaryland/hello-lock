@@ -94,6 +94,7 @@ Item {
   property string typingEffect: "cells"
   property string handoff: "shuffle"
   property bool clock: true
+  property string clockFormat: "12h"
   property bool powerDown: true
   property string motion: "auto"
   property bool sounds: true
@@ -274,6 +275,7 @@ Item {
     var handoffId = str(c.handoff).toLowerCase()
     handoff = handoffs.some(function(h) { return h.id === handoffId }) ? handoffId : "shuffle"
     clock = c.clock !== false
+    clockFormat = c.clockFormat === "24h" ? "24h" : "12h"
     powerDown = c.powerDown !== false
     motion = c.motion === "reduced" || c.motion === "full" ? c.motion : "auto"
     sounds = c.sounds !== false
@@ -1656,6 +1658,19 @@ Item {
           description: "A CRT shut-off as the screen locks. It takes a private screenshot in memory and deletes it right after."
           checked: root.powerDown
           onToggled: { root.powerDown = !root.powerDown; root.save({ powerDown: root.powerDown }) }
+        }
+      }
+      Column {
+        width: parent.width
+        spacing: 10
+        enabled: root.clock
+        opacity: root.clock ? 1 : 0.42
+        Behavior on opacity { NumberAnimation { duration: Theme.uiMs; easing.type: Easing.OutCubic } }
+        GroupLabel { text: "CLOCK" }
+        Segmented {
+          options: [{ value: "12h", label: "12-hour" }, { value: "24h", label: "24-hour" }]
+          value: root.clockFormat
+          onPicked: function(v) { root.clockFormat = v; root.save({ clockFormat: v === "24h" ? v : null }) }
         }
       }
       Column {

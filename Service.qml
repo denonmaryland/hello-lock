@@ -128,7 +128,7 @@ Item {
   readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/hello-lock"
   readonly property var configDefaults: ({
     name: "", brand: "", logo: "", symbol: "", symbolParts: [], tintLogo: true,
-    birthday: "", sounds: true, weather: true, powerDown: true, legendary: true, clock: true,
+    birthday: "", sounds: true, weather: true, powerDown: true, legendary: true, clock: true, clockFormat: "12h",
     motion: "auto", typingEffect: "cells", typingSound: "shuffle", handoff: "shuffle", greeting: true, unlockBackdrop: true,
     unlockAnimation: true, unlockDuration: 0, brandingPresets: [], presetMode: "manual", selectedPreset: ""
   })
@@ -894,6 +894,7 @@ Item {
         logoPath: root.logoPath
         tintLogo: root.config.tintLogo !== false
         showClock: root.config.clock !== false
+        use24Hour: root.config.clockFormat === "24h"
         reducedMotion: root.reducedMotion
         typingEffect: root.lockViewTypingEffect
         screenIndex: root.screenIndexOf(lockSurface.screen)
@@ -1017,6 +1018,7 @@ Item {
         logoPath: root.logoPath
         tintLogo: root.config.tintLogo !== false
         showClock: root.config.clock !== false
+        use24Hour: root.config.clockFormat === "24h"
         reducedMotion: root.previewMotion === "reduced" || (root.previewMotion !== "full" && root.reducedMotion)
         loadBackground: root.previewVisible
         passwordText: "x".repeat(root.previewTyped)
