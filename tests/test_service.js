@@ -793,6 +793,17 @@ for (const start of ['first-lock', 'after-loss']) {
   assert.match(cover, /Component\.onCompleted: \{\n        ruleLaunchNeeded = root\.coverRuleLaunches \+ 1\n        root\.applyCoverRule\(\)\n      \}/,
     'a new cover asks for a fresh rule run and waits for it');
   assert.match(cover, /interval: 300\n        running: root\.lockCoverShown && !coverWindow\.visible && !coverWindow\.ruleReady\n/);
+  const gate = cover.match(/readonly property bool gateOpen: ([^\n]*)/)[1];
+  const opens = (state) => {
+    const w = Object.assign({ruleWaitExpired: false, ruleLaunchNeeded: 3}, state.w);
+    const root = Object.assign({lockCoverShown: true, coverRuleValid: true, coverRuleEpoch: 3}, state.root);
+    w.ruleReady = vm.runInNewContext(`(${ready})`, {root, ruleLaunchNeeded: w.ruleLaunchNeeded});
+    return vm.runInNewContext(`(${gate})`, Object.assign({root}, w));
+  };
+  for (const state of [{}, {root: {coverRuleEpoch: 2}}, {root: {coverRuleValid: false}}, {root: {coverRuleValid: false}, w: {ruleWaitExpired: true}}, {root: {lockCoverShown: false}}])
+    assert.equal(opens(state), show(state), 'the latch is set exactly when an unlatched cover would map');
+  assert.match(cover, /onGateOpenChanged: if \(gateOpen\) shownLatched = true/);
+  assert.doesNotMatch(cover, /onVisibleChanged[^\n]*shownLatched/, 'visible reads shownLatched, so writing it from onVisibleChanged is a binding loop');
 }
 {
   // T54 (P3): QML int is 32-bit and would wrap after 2^31 launches, flipping
